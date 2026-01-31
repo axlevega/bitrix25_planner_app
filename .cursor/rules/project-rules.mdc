@@ -1,0 +1,9 @@
+---
+description: 
+alwaysApply: true
+---
+
+Для работы с api crm bitrix24 использую официальную документацию по этим ссылкам:
+https://apidocs.bitrix24.ru, https://apidocs.bitrix24.ru/api-reference/index.html.
+
+Придерживайся плана из вайла planning.md и актуализируй прогресс в checklist.md
