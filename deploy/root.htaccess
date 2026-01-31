@@ -2,6 +2,14 @@
 # /api -> backend/public/index.php, остальное -> public/ (фронт), SPA fallback -> public/index.html
 # Имена каталогов подставляются при деплое из FTP_REMOTE_BACKEND и FTP_REMOTE_FRONTEND.
 
+# CORS для запросов с локального фронта (localhost) к удалённому API
+<IfModule mod_headers.c>
+    Header always set Access-Control-Allow-Origin "*"
+    Header always set Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+    Header always set Access-Control-Allow-Headers "Content-Type, Authorization"
+    Header always set Access-Control-Max-Age "86400"
+</IfModule>
+
 <IfModule mod_rewrite.c>
 RewriteEngine On
 RewriteBase /

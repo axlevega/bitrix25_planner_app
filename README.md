@@ -10,17 +10,24 @@
 
 ## Запуск
 
-### Backend
+### Вариант 1: Локальный фронт + удалённый бэкенд
 
-1. Скопировать `.env.example` в `.env`, заполнить `DB_*` и при необходимости `BITRIX24_WEBHOOK_URL`.
-2. Выполнить `docs/sql/01_create_db.sql` (создание БД и пользователя).
-3. В каталоге `backend`: `composer install`.
-4. Настроить веб-сервер на `backend/public` (или `php -S localhost:8000 -t backend/public` для разработки).
+Бэкенд уже на сервере, фронт запускаете у себя.
 
-### Frontend
+1. В **frontend** создайте `frontend/.env` (из `frontend/.env.example`).
+2. Укажите URL API: `VITE_API_BASE_URL=https://ваш-домен.ru/api`.
+3. В каталоге frontend: `npm install`, затем `npm run dev`.
+4. Откройте в браузере адрес Vite (обычно http://localhost:5173). Запросы пойдут на удалённый API (CORS уже настроен на бэкенде).
 
-1. В каталоге `frontend`: `npm install`, затем `npm run dev`.
-2. Для запросов к API в dev можно использовать proxy (настроен в `vite.config.js` на `/api` → `http://localhost:8000`). Либо задать `VITE_API_BASE_URL` в `.env`.
+### Вариант 2: Всё на сервере (деплой)
+
+Собрать и залить проект на сервер, тестировать по домену.
+
+1. В **frontend/.env** оставьте `VITE_API_BASE_URL=` пустым или задайте `/api`.
+2. Настройте FTP в корневом `.env`, выполните `npm run deploy`.
+3. На сервере настройте БД, `.env`, `composer install` в backend. Открывайте сайт по домену.
+
+Подробнее — **docs/DEPLOY.md** (оба варианта и настройка FTP).
 
 ### Деплой на сервер по FTP
 

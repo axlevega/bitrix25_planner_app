@@ -19,6 +19,7 @@ Thumbs.db
 
 # Build / cache
 frontend/dist/
+scripts/fetched-htaccess/
 *.log
 cache/
 

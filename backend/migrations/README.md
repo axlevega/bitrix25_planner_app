@@ -15,3 +15,8 @@
    - либо через скрипт (если добавлен): `php backend/scripts/migrate.php` из корня проекта.
 
 Перед применением новой миграции сделайте бэкап БД.
+
+## Список миграций
+
+- **001_initial_schema.sql** — таблицы: departments, specialists, work_types, bitrix24_*, integration_settings, sync_log.
+- **002_sync_state.sql** — колонки в integration_settings для постраничной синхронизации: sync_phase, sync_tasks_offset, sync_users_offset.

@@ -1,8 +1,22 @@
+# CORS: заголовки на все ответы (в т.ч. 401 от Basic Auth), иначе локальный фронт получит CORS error
+<IfModule mod_headers.c>
+    Header always set Access-Control-Allow-Origin "*"
+    Header always set Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+    Header always set Access-Control-Allow-Headers "Content-Type, Authorization"
+    Header always set Access-Control-Max-Age "86400"
+</IfModule>
+
 # Раскомментировать и указать абсолютный путь к .htpasswd для защиты API
+# OPTIONS должен проходить без авторизации (preflight), иначе CORS error при запросах с localhost
 # AuthType Basic
 # AuthName "Bitrix25 Planner"
 # AuthUserFile /absolute/path/to/project/.htpasswd
 # Require valid-user
+# Если включена авторизация — замените "Require valid-user" на блок ниже, чтобы OPTIONS не требовал логина:
+# <RequireAny>
+#     Require method OPTIONS
+#     Require valid-user
+# </RequireAny>
 
 <IfModule mod_rewrite.c>
     RewriteEngine On
