@@ -1,0 +1,11 @@
+# Раскомментировать и указать абсолютный путь к .htpasswd для защиты API
+# AuthType Basic
+# AuthName "Bitrix25 Planner"
+# AuthUserFile /absolute/path/to/project/.htpasswd
+# Require valid-user
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteRule ^ index.php [QSA,L]
+</IfModule>
