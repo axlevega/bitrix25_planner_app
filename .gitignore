@@ -1,0 +1,23 @@
+# Dependencies
+vendor/
+node_modules/
+
+# Environment and secrets
+.env
+.htpasswd
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Build / cache
+frontend/dist/
+*.log
+cache/
+
+# PHP
+composer.lock
