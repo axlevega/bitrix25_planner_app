@@ -7,3 +7,5 @@ alwaysApply: true
 https://apidocs.bitrix24.ru, https://apidocs.bitrix24.ru/api-reference/index.html.
 
 Придерживайся плана из вайла planning.md и актуализируй прогресс в checklist.md
+
+Любые изменения в БД нужно фиксировать в папке backend/migrations. В каждой миграции нужно описывать комментарий о вносимых изменениях.
