@@ -1,0 +1,25 @@
+# Роутинг для виртуального хостинга (public_html).
+# /api -> backend/public/index.php, остальное -> public/ (фронт), SPA fallback -> public/index.html
+# Имена каталогов подставляются при деплое из FTP_REMOTE_BACKEND и FTP_REMOTE_FRONTEND.
+
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteBase /
+
+# API: все запросы /api и /api/* направлять в backend
+RewriteCond %{REQUEST_URI} ^/api
+RewriteRule ^api/?(.*)$ BACKEND_PLACEHOLDER/public/index.php [L,QSA]
+
+# Существующий файл в каталоге фронта — отдать его
+RewriteCond %{DOCUMENT_ROOT}/FRONTEND_PLACEHOLDER%{REQUEST_URI} -f
+RewriteRule ^(.*)$ FRONTEND_PLACEHOLDER/$1 [L]
+
+# Существующая директория в каталоге фронта
+RewriteCond %{DOCUMENT_ROOT}/FRONTEND_PLACEHOLDER%{REQUEST_URI} -d
+RewriteRule ^(.*)$ FRONTEND_PLACEHOLDER/$1 [L]
+
+# SPA: всё остальное — index.html приложения
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.*)$ FRONTEND_PLACEHOLDER/index.html [L]
+</IfModule>

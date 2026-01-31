@@ -4,7 +4,10 @@ node_modules/
 
 # Environment and secrets
 .env
+.env.local
 .htpasswd
+backend/.env
+backend/.env.local
 
 # IDE / OS
 .idea/
