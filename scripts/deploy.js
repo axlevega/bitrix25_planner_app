@@ -19,7 +19,8 @@ const FRONTEND_DIST_EXCLUDE = new Set(['.git']);
 
 function shouldExclude(name, excludeSet) {
   if (excludeSet.has(name)) return true;
-  if (name.startsWith('.')) return true;
+  // Не исключаем .htaccess — он нужен в backend/public для CORS и роутинга
+  if (name.startsWith('.') && name !== '.htaccess') return true;
   return false;
 }
 

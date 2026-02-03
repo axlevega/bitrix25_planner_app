@@ -4,7 +4,9 @@
   "description": "Bitrix25 Planner — планирование нагрузки специалистов",
   "scripts": {
     "build:frontend": "cd frontend && npm run build",
-    "deploy": "node scripts/deploy.js"
+    "deploy": "node scripts/deploy.js",
+    "dev:backend": "php -S localhost:8000 -t backend/public",
+    "dev:frontend": "cd frontend && npm run dev"
   },
   "dependencies": {
     "basic-ftp": "^5.0.5"
