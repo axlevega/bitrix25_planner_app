@@ -149,15 +149,50 @@ final class Client
             return ['error' => $response['error'], 'error_description' => $response['error_description'] ?? '', 'data' => []];
         }
         $result = $response['result'] ?? null;
-        $list = [];
-        if (is_array($result) && isset($result[$resultKey])) {
-            $list = $result[$resultKey];
-        } elseif (is_array($result) && array_is_list($result)) {
-            $list = $result;
-        }
-        if (!is_array($list)) {
-            $list = [];
-        }
+        $list = $this->extractListFromResult($result, $resultKey);
         return ['data' => $list, 'total' => count($list)];
+    }
+
+    /**
+     * Извлечь массив из result: result.tasks, result.result, или result как массив.
+     */
+    private function extractListFromResult(mixed $result, string $resultKey): array
+    {
+        if (!is_array($result)) {
+            return [];
+        }
+        if (isset($result[$resultKey]) && is_array($result[$resultKey])) {
+            return $result[$resultKey];
+        }
+        if (array_is_list($result)) {
+            return $result;
+        }
+        foreach (['tasks', 'result', 'data'] as $key) {
+            if (isset($result[$key]) && is_array($result[$key])) {
+                return $result[$key];
+            }
+        }
+        return [];
+    }
+
+    /**
+     * Учёт времени по задаче (REST v2: task.elapseditem.getlist).
+     * Фильтр по TASK_ID, возвращает массив записей с USER_ID, MINUTES, CREATED_DATE и т.д.
+     *
+     * @return array{data?: array, error?: string, error_description?: string}
+     */
+    public function getTaskElapsedItems(string $taskId): array
+    {
+        $params = ['TASK_ID' => $taskId];
+        $response = $this->call('task.elapseditem.getlist', $params);
+        if (!empty($response['error'])) {
+            return ['error' => $response['error'], 'error_description' => $response['error_description'] ?? '', 'data' => []];
+        }
+        $result = $response['result'] ?? null;
+        $list = [];
+        if (is_array($result)) {
+            $list = isset($result['result']) ? $result['result'] : (array_is_list($result) ? $result : []);
+        }
+        return ['data' => is_array($list) ? $list : []];
     }
 }

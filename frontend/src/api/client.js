@@ -42,7 +42,7 @@ export const api = {
   post: (path, body) => request(path, { method: 'POST', body }),
   put: (path, body) => request(path, { method: 'PUT', body }),
   patch: (path, body) => request(path, { method: 'PATCH', body }),
-  delete: (path) => request(path, { method: 'DELETE' }),
+  delete: (path, body) => request(path, { method: 'DELETE', body }),
   // Справочники и интеграция
   departments: {
     list: () => api.get('/departments'),
@@ -61,6 +61,24 @@ export const api = {
     save: (data) => api.post('/integration-settings', data),
   },
   sync: () => api.post('/sync'),
+  // Плановые записи и загрузка (фаза 2)
+  planEntries: {
+    list: (params) => api.get('/plan-entries', params),
+    create: (data) => api.post('/plan-entries', data),
+    update: (data) => api.put('/plan-entries', data),
+    delete: (id) => api.delete('/plan-entries', { id }),
+  },
+  load: (params) => api.get('/load', params),
+  // Сетка планирования: задачи + учёт времени по дням из B24
+  planningGrid: (params) => api.get('/planning-grid', params),
+  // Справочник «проект B24 → тип работы» (регулярка/флайт)
+  projectWorkTypes: {
+    list: () => api.get('/project-work-types'),
+    get: (id) => api.get('/project-work-types', { id }),
+    create: (data) => api.post('/project-work-types', data),
+    update: (data) => api.put('/project-work-types', data),
+    delete: (id) => api.delete('/project-work-types', { id }),
+  },
 }
 
 export default api
