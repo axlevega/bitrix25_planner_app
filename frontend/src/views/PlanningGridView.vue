@@ -86,6 +86,34 @@ function planHours(task) {
   return hours.toFixed(1)
 }
 
+/** Плановые часы по дню (распределение из API plan_hours_by_date) */
+function planHoursForTaskDay(task, date) {
+  const byDate = task.plan_hours_by_date || {}
+  const h = byDate[date]
+  if (h == null || h === 0) return ''
+  return Number(h) === 0 ? '' : String(h)
+}
+
+/** Сумма плановых часов за период по задаче */
+function planHoursTotalInPeriod(task) {
+  const byDate = task.plan_hours_by_date || {}
+  const dayList = days.value || []
+  let sum = 0
+  for (const d of dayList) {
+    const h = byDate[d]
+    if (h != null) sum += Number(h)
+  }
+  return sum > 0 ? sum.toFixed(1) : (planHours(task) !== '—' ? planHours(task) : '—')
+}
+
+/** Фактические часы всего по задаче (time_spent в минутах) */
+function factHoursTotal(task) {
+  if (task.time_spent == null) return '—'
+  const v = Number(task.time_spent)
+  const hours = v >= 10000 ? v / 3600 : v / 60
+  return hours.toFixed(1)
+}
+
 async function loadRefs() {
   try {
     const [specRes, depRes] = await Promise.all([api.specialists.list(), api.departments.list()])
@@ -135,7 +163,7 @@ onMounted(loadRefs)
 <template>
   <div class="page">
     <h1 class="page__title">Планирование (сетка)</h1>
-    <p class="page__desc">Сетка по задачам Bitrix24: строки — активные задачи выбранных специалистов, колонки — дни. В ячейках — часы из учёта времени B24 (кто сколько трекал в этот день). Сначала запустите синхронизацию в настройках интеграции.</p>
+    <p class="page__desc">Сетка по задачам Bitrix24: у каждой задачи две подстроки — <strong>План</strong> (распределённые по дням трудозатраты по датам начала/окончания или постановки/дедлайна) и <strong>Факт</strong> (учёт времени B24 по дням). Колонки — дни. Запустите синхронизацию в настройках интеграции.</p>
 
     <p v-if="error" class="error">{{ error }}</p>
 
@@ -174,22 +202,35 @@ onMounted(loadRefs)
         <table class="grid-table">
           <thead>
             <tr>
-              <th class="th-fixed th-task">Задача</th>
+              <th class="th-fixed th-task">Задача / тип</th>
               <th class="th-fixed th-spec">Специалист</th>
-              <th class="th-fixed th-hours">План ч</th>
+              <th class="th-fixed th-hours">Часы</th>
               <th v-for="day in days" :key="day" class="th-day" :class="{ 'th-day--weekend': isWeekend(day) }">{{ day.slice(8, 10) }}.{{ day.slice(5, 7) }}</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="t in (gridData.tasks || [])" :key="t.bitrix24_task_id">
-              <td class="td-fixed td-task" :title="t.title">
-                <a v-if="taskLink(t)" :href="taskLink(t)" target="_blank" rel="noopener noreferrer" class="task-link">{{ (t.title || '').slice(0, 40) }}{{ (t.title || '').length > 40 ? '…' : '' }}</a>
-                <span v-else>{{ (t.title || '').slice(0, 40) }}{{ (t.title || '').length > 40 ? '…' : '' }}</span>
-              </td>
-              <td class="td-fixed td-spec">{{ specialistNameByB24Id[t.responsible_user_id] || t.responsible_user_id || '—' }}</td>
-              <td class="td-fixed td-hours">{{ planHours(t) }}</td>
-              <td v-for="day in days" :key="day" class="td-day" :class="{ 'td-day--weekend': isWeekend(day) }">{{ hoursForTaskDay(t.bitrix24_task_id, day) }}</td>
-            </tr>
+            <template v-for="t in (gridData.tasks || [])" :key="t.bitrix24_task_id">
+              <!-- Подстрока План -->
+              <tr class="row-plan">
+                <td class="td-fixed td-task" :title="t.title">
+                  <a v-if="taskLink(t)" :href="taskLink(t)" target="_blank" rel="noopener noreferrer" class="task-link">{{ (t.title || '').slice(0, 40) }}{{ (t.title || '').length > 40 ? '…' : '' }}</a>
+                  <span v-else>{{ (t.title || '').slice(0, 40) }}{{ (t.title || '').length > 40 ? '…' : '' }}</span>
+                  <span class="row-type row-type--plan">План</span>
+                </td>
+                <td class="td-fixed td-spec">{{ specialistNameByB24Id[t.responsible_user_id] || t.responsible_user_id || '—' }}</td>
+                <td class="td-fixed td-hours">{{ planHoursTotalInPeriod(t) }}</td>
+                <td v-for="day in days" :key="day" class="td-day td-day--plan" :class="{ 'td-day--weekend': isWeekend(day) }">{{ planHoursForTaskDay(t, day) }}</td>
+              </tr>
+              <!-- Подстрока Факт -->
+              <tr class="row-fact">
+                <td class="td-fixed td-task td-task-fact">
+                  <span class="row-type row-type--fact">Факт</span>
+                </td>
+                <td class="td-fixed td-spec">{{ specialistNameByB24Id[t.responsible_user_id] || t.responsible_user_id || '—' }}</td>
+                <td class="td-fixed td-hours">{{ factHoursTotal(t) }}</td>
+                <td v-for="day in days" :key="day" class="td-day td-day--fact" :class="{ 'td-day--weekend': isWeekend(day) }">{{ hoursForTaskDay(t.bitrix24_task_id, day) }}</td>
+              </tr>
+            </template>
           </tbody>
         </table>
       </div>
@@ -241,4 +282,13 @@ onMounted(loadRefs)
 .grid-table .td-day { color: #475569; background: #fff; }
 .grid-table .th-day--weekend, .grid-table .td-day--weekend { background: #f5f5f5; color: #64748b; }
 .grid-table .td-fixed + .td-day--weekend { box-shadow: -2px 0 0 0 #f5f5f5; }
+
+/* Подстроки План / Факт */
+.row-type { font-size: 0.75rem; color: #94a3b8; margin-left: 0.35rem; }
+.row-type--plan { color: #0ea5e9; }
+.row-type--fact { color: #22c55e; }
+.grid-table tr.row-fact .td-fixed { background: #f8fafc; }
+.grid-table tr.row-fact .td-day { background: #f8fafc; }
+.grid-table tr.row-fact .td-day--weekend { background: #f1f5f9; }
+.td-task-fact { padding-left: 1rem; }
 </style>

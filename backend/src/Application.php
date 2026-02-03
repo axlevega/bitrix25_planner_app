@@ -471,9 +471,13 @@ final class Application
                 return ['tasks' => [], 'elapsed' => [], 'specialists' => $specialists, 'date_from' => $dateFrom, 'date_to' => $dateTo, 'portal_url' => $portalUrl];
             }
             $phTask = implode(',', array_fill(0, count($taskIdsInPeriod), '?'));
-            $stmt = $pdo->prepare("SELECT bitrix24_task_id, title, responsible_user_id, deadline, time_estimate, time_spent, group_id FROM bitrix24_tasks_cache WHERE bitrix24_task_id IN ($phTask) ORDER BY deadline, bitrix24_task_id");
+            $stmt = $pdo->prepare("SELECT bitrix24_task_id, title, responsible_user_id, deadline, time_estimate, time_spent, group_id, start_date_plan, end_date_plan, created_date FROM bitrix24_tasks_cache WHERE bitrix24_task_id IN ($phTask) ORDER BY deadline, bitrix24_task_id");
             $stmt->execute($taskIdsInPeriod);
             $tasks = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+            foreach ($tasks as &$task) {
+                $task['plan_hours_by_date'] = self::computePlanHoursByDate($task, $dateFrom, $dateTo);
+            }
+            unset($task);
             return ['tasks' => $tasks, 'elapsed' => $elapsed, 'specialists' => $specialists, 'date_from' => $dateFrom, 'date_to' => $dateTo, 'portal_url' => $portalUrl];
         });
 
@@ -535,5 +539,53 @@ final class Application
     {
         http_response_code($status);
         echo json_encode($data, JSON_UNESCAPED_UNICODE);
+    }
+
+    /**
+     * Распределение планируемых трудозатрат по дням: план_начало = start_date_plan или created_date,
+     * план_окончание = end_date_plan или deadline; время (time_estimate, мин) равномерно по дням.
+     *
+     * @return array<string, float> дата Y-m-d => часы
+     */
+    private static function computePlanHoursByDate(array $task, string $periodFrom, string $periodTo): array
+    {
+        $planStart = self::dateOnly($task['start_date_plan'] ?? null) ?? self::dateOnly($task['created_date'] ?? null);
+        $planEnd = self::dateOnly($task['end_date_plan'] ?? null) ?? self::dateOnly($task['deadline'] ?? null);
+        if ($planStart === null || $planEnd === null) {
+            return [];
+        }
+        $estimate = (int) ($task['time_estimate'] ?? 0);
+        if ($estimate <= 0) {
+            return [];
+        }
+        $totalHours = $estimate >= 10000 ? $estimate / 3600.0 : $estimate / 60.0;
+        $start = new \DateTimeImmutable($planStart);
+        $end = new \DateTimeImmutable($planEnd);
+        if ($start > $end) {
+            $start = $end;
+            $end = new \DateTimeImmutable($planStart);
+        }
+        $daysCount = $start->diff($end)->days + 1;
+        $hoursPerDay = $totalHours / max(1, $daysCount);
+        $result = [];
+        $periodStart = new \DateTimeImmutable($periodFrom);
+        $periodEnd = new \DateTimeImmutable($periodTo);
+        $cursor = $start;
+        while ($cursor <= $end && $cursor <= $periodEnd) {
+            if ($cursor >= $periodStart) {
+                $result[$cursor->format('Y-m-d')] = round($hoursPerDay, 1);
+            }
+            $cursor = $cursor->modify('+1 day');
+        }
+        return $result;
+    }
+
+    private static function dateOnly(?string $dt): ?string
+    {
+        if ($dt === null || $dt === '') {
+            return null;
+        }
+        $ts = strtotime($dt);
+        return $ts ? date('Y-m-d', $ts) : null;
     }
 }
