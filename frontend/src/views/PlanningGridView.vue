@@ -12,6 +12,8 @@ const dateTo = ref('')
 const gridData = ref(null)
 const loading = ref(false)
 const error = ref(null)
+/** Скрыть задачи без планового времени (time_estimate); по умолчанию включено */
+const hideTasksWithoutPlan = ref(true)
 
 function defaultPeriod() {
   const now = new Date()
@@ -57,6 +59,18 @@ const specialistNameByB24Id = computed(() => {
     if (s.bitrix24_user_id) map[s.bitrix24_user_id] = s.name
   }
   return map
+})
+
+/** Задачи для таблицы: при включённой галочке — только с плановым временем (time_estimate > 0) */
+const filteredTasks = computed(() => {
+  const list = gridData.value?.tasks || []
+  if (!hideTasksWithoutPlan.value) return list
+  return list.filter((t) => {
+    const v = t.time_estimate
+    if (v == null) return false
+    const n = Number(v)
+    return n > 0
+  })
 })
 
 function hoursForTaskDay(taskId, date) {
@@ -190,6 +204,10 @@ onMounted(loadRefs)
       </label>
       <label>С <input v-model="dateFrom" type="date" class="input" /></label>
       <label>По <input v-model="dateTo" type="date" class="input" /></label>
+      <label class="filter-checkbox">
+        <input v-model="hideTasksWithoutPlan" type="checkbox" />
+        Скрыть задачи без планового времени
+      </label>
       <button type="button" class="btn btn--primary" :disabled="loading" @click="loadGrid">
         {{ loading ? 'Загрузка…' : 'Показать сетку' }}
       </button>
@@ -209,7 +227,7 @@ onMounted(loadRefs)
             </tr>
           </thead>
           <tbody>
-            <template v-for="t in (gridData.tasks || [])" :key="t.bitrix24_task_id">
+            <template v-for="t in filteredTasks" :key="t.bitrix24_task_id">
               <!-- Подстрока План -->
               <tr class="row-plan">
                 <td class="td-fixed td-task" :title="t.title">
@@ -234,7 +252,9 @@ onMounted(loadRefs)
           </tbody>
         </table>
       </div>
-      <p v-if="gridData.tasks && gridData.tasks.length === 0" class="muted">Нет задач у выбранных специалистов за период. Запустите синхронизацию с Bitrix24.</p>
+      <p v-if="filteredTasks.length === 0" class="muted">
+        {{ gridData.tasks?.length === 0 ? 'Нет задач у выбранных специалистов за период. Запустите синхронизацию с Bitrix24.' : 'Нет задач с плановым временем. Снимите галочку «Скрыть задачи без планового времени», чтобы показать все.' }}
+      </p>
     </section>
   </div>
 </template>
@@ -247,6 +267,7 @@ onMounted(loadRefs)
 .filter-section { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-start; margin-bottom: 1.5rem; }
 .filter-section label { display: flex; align-items: center; gap: 0.35rem; font-size: 0.9rem; }
 .filter-multi { flex-direction: column; align-items: flex-start; }
+.filter-checkbox { white-space: nowrap; }
 .input { padding: 0.4rem 0.6rem; border: 1px solid #cbd5e1; border-radius: 4px; }
 .btn { padding: 0.4rem 0.75rem; border: 1px solid #cbd5e1; border-radius: 4px; background: #fff; cursor: pointer; font-size: 0.9rem; }
 .btn--primary { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
