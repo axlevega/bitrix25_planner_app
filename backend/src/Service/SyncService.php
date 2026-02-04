@@ -77,7 +77,7 @@ final class SyncService
         }
 
         $client = new Client($url);
-        $taskSelect = ['ID', 'TITLE', 'RESPONSIBLE_ID', 'DEADLINE', 'TIME_ESTIMATE', 'TIME_SPENT', 'STATUS', 'GROUP_ID', 'START_DATE_PLAN', 'END_DATE_PLAN', 'CREATED_DATE'];
+        $taskSelect = ['ID', 'TITLE', 'RESPONSIBLE_ID', 'DEADLINE', 'TIME_ESTIMATE', 'TIME_SPENT', 'DURATION_FACT', 'TIME_SPENT_IN_LOGS', 'STATUS', 'GROUP_ID', 'START_DATE_PLAN', 'END_DATE_PLAN', 'CREATED_DATE'];
         if ($phase === 0 && $tasksOffset === 0) {
             $ufRaw = $client->getTaskUserFieldListRaw();
             if (empty($ufRaw['error']) && !empty($ufRaw['items'])) {
@@ -385,8 +385,17 @@ final class SyncService
             $title = $t['title'] ?? $t['TITLE'] ?? null;
             $responsible = $t['responsibleId'] ?? $t['RESPONSIBLE_ID'] ?? null;
             $deadline = $this->parseDate($t['deadline'] ?? $t['DEADLINE'] ?? null);
+            // В БД храним минуты; данные из B24 приходят в минутах
             $timeEst = $t['timeEstimate'] ?? $t['TIME_ESTIMATE'] ?? null;
-            $timeSpent = $t['timeSpent'] ?? $t['TIME_SPENT'] ?? null;
+            if ($timeEst !== null) {
+                $timeEst = (int) $timeEst;
+            }
+            // B24: TIME_SPENT не всегда в ответе; DURATION_FACT — минуты, TIME_SPENT_IN_LOGS — секунды
+            $timeSpent = $t['timeSpent'] ?? $t['TIME_SPENT'] ?? $t['durationFact'] ?? $t['DURATION_FACT'] ?? null;
+            if ($timeSpent === null) {
+                $logs = $t['timeSpentInLogs'] ?? $t['TIME_SPENT_IN_LOGS'] ?? null;
+                $timeSpent = $logs !== null ? (int) round((int) $logs / 60) : null;
+            }
             $status = $t['status'] ?? $t['STATUS'] ?? null;
             $groupId = $t['groupId'] ?? $t['GROUP_ID'] ?? null;
             $startDatePlan = $this->parseDate($t['startDatePlan'] ?? $t['START_DATE_PLAN'] ?? null);

@@ -219,9 +219,12 @@ final class LoadService
             $est = (int) ($r['time_estimate'] ?? 0);
             $spent = (int) ($r['time_spent'] ?? 0);
             $deadline = $r['deadline'] ?? '';
+            $toHours = static function (int $v): float {
+                return $v / 60.0;
+            };
             $hours = ($deadline !== '' && $deadline < $now)
-                ? $spent / 60.0
-                : max(0, $est - $spent) / 60.0;
+                ? $toHours($spent)
+                : max(0.0, $toHours($est) - $toHours($spent));
             $groupId = $r['group_id'] ?? '';
             $workTypeId = $groupId !== '' && isset($map[$groupId]) ? $map[$groupId] : 1;
             if ($workTypeId === 2) {

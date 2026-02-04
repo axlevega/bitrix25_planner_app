@@ -526,6 +526,16 @@ final class Application
             $stmt->execute($taskIdsInPeriod);
             $tasks = $stmt->fetchAll(\PDO::FETCH_ASSOC);
 
+            // Сумма фактических трудозатрат из учёта по дням (если в кэше time_spent пусто)
+            $totalElapsedByTask = [];
+            if ($tasks !== []) {
+                $stmt = $pdo->prepare("SELECT bitrix24_task_id, SUM(minutes) AS total_minutes FROM bitrix24_task_elapsed WHERE bitrix24_task_id IN ($phTask) GROUP BY bitrix24_task_id");
+                $stmt->execute($taskIdsInPeriod);
+                while ($row = $stmt->fetch(\PDO::FETCH_ASSOC)) {
+                    $totalElapsedByTask[$row['bitrix24_task_id']] = (int) $row['total_minutes'];
+                }
+            }
+
             $overrides = [];
             $dailyByTask = [];
             if ($tasks !== []) {
@@ -574,6 +584,10 @@ final class Application
                 $task['plan_hours_by_date'] = $baseReplan;
                 foreach ($dailyMap as $d => $h) {
                     $task['plan_hours_by_date'][$d] = round($h, 1);
+                }
+                // Факт: из кэша или сумма из bitrix24_task_elapsed (минуты)
+                if ($task['time_spent'] === null || $task['time_spent'] === '') {
+                    $task['time_spent'] = $totalElapsedByTask[$tid] ?? null;
                 }
             }
             unset($task);
@@ -772,9 +786,16 @@ final class Application
         }
     }
 
+    /** Суббота (6) и воскресенье (0) не участвуют в планировании. */
+    private static function isWeekend(\DateTimeImmutable $d): bool
+    {
+        $w = (int) $d->format('w');
+        return $w === 0 || $w === 6;
+    }
+
     /**
-     * Распределение планируемых трудозатрат по дням: план_начало = start_date_plan или created_date,
-     * план_окончание = end_date_plan или deadline; время (time_estimate, мин) равномерно по дням.
+     * Распределение планируемых трудозатрат по рабочим дням (пн–пт): план_начало = start_date_plan или created_date,
+     * план_окончание = end_date_plan или deadline; время равномерно по рабочим дням, выходные не учитываются.
      *
      * @return array<string, float> дата Y-m-d => часы
      */
@@ -789,30 +810,41 @@ final class Application
         if ($estimate <= 0) {
             return [];
         }
-        $totalHours = $estimate >= 10000 ? $estimate / 3600.0 : $estimate / 60.0;
+        // В БД время в минутах
+        $totalHours = $estimate / 60.0;
         $start = new \DateTimeImmutable($planStart);
         $end = new \DateTimeImmutable($planEnd);
         if ($start > $end) {
             $start = $end;
             $end = new \DateTimeImmutable($planStart);
         }
-        $daysCount = $start->diff($end)->days + 1;
-        $hoursPerDay = $totalHours / max(1, $daysCount);
-        $result = [];
-        $periodStart = new \DateTimeImmutable($periodFrom);
-        $periodEnd = new \DateTimeImmutable($periodTo);
+        $workingDays = [];
         $cursor = $start;
-        while ($cursor <= $end && $cursor <= $periodEnd) {
-            if ($cursor >= $periodStart) {
-                $result[$cursor->format('Y-m-d')] = round($hoursPerDay, 1);
+        while ($cursor <= $end) {
+            if (!self::isWeekend($cursor)) {
+                $workingDays[] = $cursor->format('Y-m-d');
             }
             $cursor = $cursor->modify('+1 day');
+        }
+        $workingDaysCount = count($workingDays);
+        if ($workingDaysCount === 0) {
+            return [];
+        }
+        $hoursPerDay = $totalHours / $workingDaysCount;
+        $periodStart = new \DateTimeImmutable($periodFrom);
+        $periodEnd = new \DateTimeImmutable($periodTo);
+        $result = [];
+        foreach ($workingDays as $dayStr) {
+            $d = new \DateTimeImmutable($dayStr);
+            if ($d >= $periodStart && $d <= $periodEnd) {
+                $result[$dayStr] = round($hoursPerDay, 3);
+            }
         }
         return $result;
     }
 
     /**
-     * Распределение плановых часов по дням при заданных датах и оценке в минутах.
+     * Распределение плановых часов по рабочим дням (пн–пт) при заданных датах и оценке; выходные не участвуют.
      *
      * @return array<string, float> дата Y-m-d => часы
      */
@@ -821,24 +853,34 @@ final class Application
         if ($planStart === null || $planEnd === null || $estimateMinutes <= 0) {
             return [];
         }
-        $totalHours = $estimateMinutes >= 10000 ? $estimateMinutes / 3600.0 : $estimateMinutes / 60.0;
+        $totalHours = $estimateMinutes / 60.0;
         $start = new \DateTimeImmutable($planStart);
         $end = new \DateTimeImmutable($planEnd);
         if ($start > $end) {
             $start = new \DateTimeImmutable($planEnd);
             $end = new \DateTimeImmutable($planStart);
         }
-        $daysCount = $start->diff($end)->days + 1;
-        $hoursPerDay = $totalHours / max(1, $daysCount);
-        $result = [];
-        $periodStart = new \DateTimeImmutable($periodFrom);
-        $periodEnd = new \DateTimeImmutable($periodTo);
+        $workingDays = [];
         $cursor = $start;
-        while ($cursor <= $end && $cursor <= $periodEnd) {
-            if ($cursor >= $periodStart) {
-                $result[$cursor->format('Y-m-d')] = round($hoursPerDay, 1);
+        while ($cursor <= $end) {
+            if (!self::isWeekend($cursor)) {
+                $workingDays[] = $cursor->format('Y-m-d');
             }
             $cursor = $cursor->modify('+1 day');
+        }
+        $workingDaysCount = count($workingDays);
+        if ($workingDaysCount === 0) {
+            return [];
+        }
+        $hoursPerDay = $totalHours / $workingDaysCount;
+        $periodStart = new \DateTimeImmutable($periodFrom);
+        $periodEnd = new \DateTimeImmutable($periodTo);
+        $result = [];
+        foreach ($workingDays as $dayStr) {
+            $d = new \DateTimeImmutable($dayStr);
+            if ($d >= $periodStart && $d <= $periodEnd) {
+                $result[$dayStr] = round($hoursPerDay, 3);
+            }
         }
         return $result;
     }
