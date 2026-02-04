@@ -173,7 +173,8 @@ final class SyncService
         }
 
         if ($phase === 2) {
-            $taskIds = $this->getTaskIdsForElapsedSync($elapsedOffset, self::ELAPSED_TASKS_PER_CHUNK);
+            [$dateFrom, $dateTo] = $this->getSyncDateRange();
+            $taskIds = $this->getTaskIdsForElapsedSync($elapsedOffset, self::ELAPSED_TASKS_PER_CHUNK, $dateFrom, $dateTo);
             $elapsedCount = 0;
             $syncedAt = date('Y-m-d H:i:s');
             foreach ($taskIds as $taskId) {
@@ -434,12 +435,26 @@ final class SyncService
         return $ts ? date('Y-m-d', $ts) : null;
     }
 
-    /** @return list<string> bitrix24_task_id */
-    private function getTaskIdsForElapsedSync(int $offset, int $limit): array
+    /**
+     * ID задач для запроса учёта времени — только задачи в выбранном диапазоне (по created_date).
+     * @param string|null $dateTo Y-m-d или null (без верхней границы)
+     * @return list<string> bitrix24_task_id
+     */
+    private function getTaskIdsForElapsedSync(int $offset, int $limit, string $dateFrom, ?string $dateTo): array
     {
-        $stmt = $this->pdo->prepare('SELECT bitrix24_task_id FROM bitrix24_tasks_cache ORDER BY id LIMIT ? OFFSET ?');
-        $stmt->bindValue(1, $limit, PDO::PARAM_INT);
-        $stmt->bindValue(2, $offset, PDO::PARAM_INT);
+        $sql = 'SELECT bitrix24_task_id FROM bitrix24_tasks_cache WHERE created_date >= ?';
+        $params = [$dateFrom . ' 00:00:00'];
+        if ($dateTo !== null && $dateTo !== '') {
+            $sql .= ' AND created_date <= ?';
+            $params[] = $dateTo . ' 23:59:59';
+        }
+        $sql .= ' ORDER BY id LIMIT ? OFFSET ?';
+        $params[] = $limit;
+        $params[] = $offset;
+        $stmt = $this->pdo->prepare($sql);
+        foreach ($params as $i => $v) {
+            $stmt->bindValue($i + 1, $v, is_int($v) ? PDO::PARAM_INT : PDO::PARAM_STR);
+        }
         $stmt->execute();
         return $stmt->fetchAll(PDO::FETCH_COLUMN);
     }
