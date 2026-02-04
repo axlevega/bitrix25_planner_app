@@ -492,7 +492,7 @@ final class Application
                 $portalUrl = rtrim(trim($portal), '/');
             }
             if ($b24UserIds === []) {
-                return ['tasks' => [], 'elapsed' => [], 'specialists' => $specialists, 'date_from' => $dateFrom, 'date_to' => $dateTo, 'portal_url' => $portalUrl];
+                return ['tasks' => [], 'elapsed' => [], 'specialists' => $specialists, 'date_from' => $dateFrom, 'date_to' => $dateTo, 'portal_url' => $portalUrl, 'task_uf_catalog' => self::getTaskUfCatalog($pdo)];
             }
             $placeholders = implode(',', array_fill(0, count($b24UserIds), '?'));
             // Сначала получаем учёт времени только за выбранный период
@@ -502,8 +502,24 @@ final class Application
             $stmt->execute(array_merge($b24UserIds, [$dateFrom, $dateTo]));
             $elapsed = $stmt->fetchAll(\PDO::FETCH_ASSOC);
             $taskIdsInPeriod = array_values(array_unique(array_column($elapsed, 'task_id')));
+            $filterUfField = trim((string) ($payload['filter_uf_field_code'] ?? ''));
+            $filterUfValue = isset($payload['filter_uf_value']) ? (string) $payload['filter_uf_value'] : null;
+            if ($filterUfField !== '' && $filterUfValue !== null && $filterUfValue !== '' && $taskIdsInPeriod !== []) {
+                $check = $pdo->prepare('SELECT 1 FROM bitrix24_task_uf_catalog WHERE field_code = ?');
+                $check->execute([$filterUfField]);
+                if ($check->fetch()) {
+                    $ph = implode(',', array_fill(0, count($taskIdsInPeriod), '?'));
+                    $stmt = $pdo->prepare("SELECT DISTINCT f.bitrix24_task_id FROM bitrix24_task_custom_field f WHERE f.field_code = ? AND f.bitrix24_task_id IN ($ph) AND f.value_text = ?");
+                    $stmt->execute(array_merge([$filterUfField], $taskIdsInPeriod, [$filterUfValue]));
+                    $filteredTaskIds = $stmt->fetchAll(\PDO::FETCH_COLUMN);
+                    $taskIdsInPeriod = array_values(array_intersect($taskIdsInPeriod, $filteredTaskIds));
+                    $elapsed = array_filter($elapsed, function ($e) use ($taskIdsInPeriod) {
+                        return in_array($e['task_id'], $taskIdsInPeriod, true);
+                    });
+                }
+            }
             if ($taskIdsInPeriod === []) {
-                return ['tasks' => [], 'elapsed' => [], 'specialists' => $specialists, 'date_from' => $dateFrom, 'date_to' => $dateTo, 'portal_url' => $portalUrl];
+                return ['tasks' => [], 'elapsed' => $elapsed, 'specialists' => $specialists, 'date_from' => $dateFrom, 'date_to' => $dateTo, 'portal_url' => $portalUrl, 'task_uf_catalog' => self::getTaskUfCatalog($pdo)];
             }
             $phTask = implode(',', array_fill(0, count($taskIdsInPeriod), '?'));
             $stmt = $pdo->prepare("SELECT bitrix24_task_id, title, responsible_user_id, deadline, time_estimate, time_spent, group_id, start_date_plan, end_date_plan, created_date FROM bitrix24_tasks_cache WHERE bitrix24_task_id IN ($phTask) ORDER BY deadline, bitrix24_task_id");
@@ -561,7 +577,27 @@ final class Application
                 }
             }
             unset($task);
-            return ['tasks' => $tasks, 'elapsed' => $elapsed, 'specialists' => $specialists, 'date_from' => $dateFrom, 'date_to' => $dateTo, 'portal_url' => $portalUrl];
+            return ['tasks' => $tasks, 'elapsed' => $elapsed, 'specialists' => $specialists, 'date_from' => $dateFrom, 'date_to' => $dateTo, 'portal_url' => $portalUrl, 'task_uf_catalog' => self::getTaskUfCatalog($pdo)];
+        });
+
+        // Каталог пользовательских полей задач (для фильтра по полям и подписей)
+        $this->router->get('/task-uf-catalog', function (array $payload): array {
+            $pdo = Database::getConnection();
+            return ['items' => self::getTaskUfCatalog($pdo)];
+        });
+        $this->router->patch('/task-uf-catalog', function (array $payload): array {
+            $pdo = Database::getConnection();
+            $fieldCode = trim((string) ($payload['field_code'] ?? ''));
+            $label = isset($payload['label']) ? trim((string) $payload['label']) : null;
+            if ($fieldCode === '') {
+                return ['error' => 'field_code required'];
+            }
+            $stmt = $pdo->prepare('UPDATE bitrix24_task_uf_catalog SET label = ? WHERE field_code = ?');
+            $stmt->execute([$label !== '' ? $label : null, $fieldCode]);
+            if ($stmt->rowCount() === 0) {
+                return ['error' => 'field not found in catalog', 'field_code' => $fieldCode];
+            }
+            return ['field_code' => $fieldCode, 'label' => $label !== '' ? $label : null];
         });
 
         // GET task-plan: исходный план и переплан по задаче (query: bitrix24_task_id)
@@ -722,6 +758,18 @@ final class Application
     {
         http_response_code($status);
         echo json_encode($data, JSON_UNESCAPED_UNICODE);
+    }
+
+    /** @return list<array{field_code: string, label: string|null}> */
+    private static function getTaskUfCatalog(\PDO $pdo): array
+    {
+        try {
+            $stmt = $pdo->query('SELECT field_code, label FROM bitrix24_task_uf_catalog ORDER BY field_code');
+            $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+            return is_array($rows) ? $rows : [];
+        } catch (\Throwable $e) {
+            return [];
+        }
     }
 
     /**

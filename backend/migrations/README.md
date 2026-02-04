@@ -29,3 +29,5 @@
 - **009_task_plan_daily.sql** — скорректированные плановые часы по дням (task_id, plan_date, planned_hours).
 - **010_integration_sync_options.sql** — настройки синхронизации: диапазон дат (sync_date_range_type, sync_date_from, sync_date_to) и список специалистов (sync_specialist_ids) для фильтра задач.
 - **011_integration_settings_key_value.sql** — переход integration_settings на модель «одна строка = одна настройка» (setting_key, setting_value). Новые настройки добавляются без изменения схемы. Применять после 010.
+- **012_bitrix24_task_custom_field.sql** — таблица пользовательских полей задач Bitrix24 (UF_*): bitrix24_task_id, field_code, value_text; для фильтрации по кастомным полям (например «Флайт»).
+- **013_bitrix24_task_uf_catalog.sql** — каталог уникальных пользовательских полей (field_code, label); в 012 пишутся только значения по полям из каталога (системные поля вроде вложений/почты/CRM исключены).

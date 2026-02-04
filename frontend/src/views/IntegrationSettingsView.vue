@@ -13,17 +13,24 @@ const settings = ref({
   sync_specialist_ids: [],
 })
 const specialists = ref([])
+const taskUfCatalog = ref([])
 const loading = ref(true)
 const error = ref(null)
 const saving = ref(false)
 const syncing = ref(false)
 const syncResult = ref(null)
+const ufLabelSaving = ref(null)
 
 async function load() {
   loading.value = true
   error.value = null
   try {
-    const [res, specRes] = await Promise.all([api.integrationSettings.get(), api.specialists.list()])
+    const [res, specRes, catalogRes] = await Promise.all([
+      api.integrationSettings.get(),
+      api.specialists.list(),
+      api.taskUfCatalog.list().catch(() => ({ items: [] })),
+    ])
+    taskUfCatalog.value = (catalogRes.items || []).map((it) => ({ ...it, label_edit: it.label ?? '' }))
     settings.value = {
       portal_url: res.portal_url || '',
       webhook_token: res.webhook_token ?? '',
@@ -39,6 +46,18 @@ async function load() {
     error.value = e.message
   } finally {
     loading.value = false
+  }
+}
+
+async function saveUfLabel(item) {
+  ufLabelSaving.value = item.field_code
+  try {
+    await api.taskUfCatalog.updateLabel({ field_code: item.field_code, label: (item.label_edit || '').trim() || null })
+    item.label = (item.label_edit || '').trim() || null
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    ufLabelSaving.value = null
   }
 }
 
@@ -237,6 +256,35 @@ onMounted(load)
         </form>
       </section>
 
+      <section v-if="taskUfCatalog.length" class="uf-catalog-section">
+        <h2>Подписи пользовательских полей задач</h2>
+        <p class="sync-desc sync-desc--hint">
+          Подписи используются в фильтрах (например, в сетке планирования). Заполненные значения не перезаписываются при синхронизации.
+        </p>
+        <table class="uf-catalog-table">
+          <thead>
+            <tr>
+              <th>Код поля (B24)</th>
+              <th>Подпись</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in taskUfCatalog" :key="item.field_code">
+              <td><code>{{ item.field_code }}</code></td>
+              <td>
+                <input v-model="item.label_edit" type="text" class="input" placeholder="Например: Флайт" />
+              </td>
+              <td>
+                <button type="button" class="btn btn--outline btn--sm" :disabled="ufLabelSaving === item.field_code" @click="saveUfLabel(item)">
+                  {{ ufLabelSaving === item.field_code ? '…' : 'Сохранить' }}
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
       <section class="sync-section">
         <h2>Синхронизация</h2>
         <p class="sync-desc">
@@ -415,6 +463,48 @@ onMounted(load)
   font-size: 0.85rem;
   color: #64748b;
   margin-bottom: 0.5rem;
+}
+.uf-catalog-section {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+.uf-catalog-section h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.1rem;
+}
+.uf-catalog-table {
+  width: 100%;
+  max-width: 560px;
+  border-collapse: collapse;
+  margin-top: 0.5rem;
+}
+.uf-catalog-table th,
+.uf-catalog-table td {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid #e2e8f0;
+}
+.uf-catalog-table th {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: #64748b;
+}
+.uf-catalog-table code {
+  font-size: 0.85rem;
+  background: #f1f5f9;
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+}
+.uf-catalog-table .input {
+  width: 100%;
+  max-width: 200px;
+}
+.btn--sm {
+  padding: 0.35rem 0.65rem;
+  font-size: 0.85rem;
 }
 .sync-section {
   background: #fff;

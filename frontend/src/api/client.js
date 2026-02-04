@@ -71,6 +71,11 @@ export const api = {
   load: (params) => api.get('/load', params),
   // Сетка планирования: задачи + учёт времени по дням из B24
   planningGrid: (params) => api.get('/planning-grid', params),
+  // Каталог пользовательских полей задач (подписи и фильтр по полям)
+  taskUfCatalog: {
+    list: () => api.get('/task-uf-catalog'),
+    updateLabel: (data) => api.patch('/task-uf-catalog', data),
+  },
   // Переплан задачи ПМ: GET — исходный и переплан, PUT — сохранение
   taskPlan: {
     get: (bitrix24TaskId) => api.get('/task-plan', { bitrix24_task_id: bitrix24TaskId }),
