@@ -51,7 +51,7 @@ final class Application
             return ['app' => 'bitrix25-planner', 'version' => '0.1', 'status' => 'ok'];
         });
 
-        // Отладка учёта времени B24: один запрос task.elapseditem.getlist по task_id (проверка, возвращает ли B24 данные)
+        // Отладка (только для разработки): учёт времени B24 по task_id
         $this->router->get('/debug-elapsed', function (array $payload): array {
             $pdo = Database::getConnection();
             $taskId = trim((string) ($payload['task_id'] ?? ''));
@@ -88,7 +88,7 @@ final class Application
             ];
         });
 
-        // Отладка подключения к БД: какие .env найдены, установлены ли DB_*, текст ошибки подключения
+        // Отладка (только для разработки): проверка .env и подключения к БД
         $this->router->get('/debug-db', function (): array {
             $paths = $_ENV['_ENV_DEBUG_PATHS'] ?? [];
             $found = $_ENV['_ENV_DEBUG_FOUND'] ?? [];
