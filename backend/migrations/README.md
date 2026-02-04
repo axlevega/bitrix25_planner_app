@@ -27,3 +27,5 @@
 - **007_task_plan_dates.sql** — колонки start_date_plan, end_date_plan, created_date в bitrix24_tasks_cache для расчёта планируемых трудозатрат по дням (план/факт в сетке).
 - **008_task_plan_override.sql** — переплан ПМ: даты переплана и снимок исходных дат/оценки из B24.
 - **009_task_plan_daily.sql** — скорректированные плановые часы по дням (task_id, plan_date, planned_hours).
+- **010_integration_sync_options.sql** — настройки синхронизации: диапазон дат (sync_date_range_type, sync_date_from, sync_date_to) и список специалистов (sync_specialist_ids) для фильтра задач.
+- **011_integration_settings_key_value.sql** — переход integration_settings на модель «одна строка = одна настройка» (setting_key, setting_value). Новые настройки добавляются без изменения схемы. Применять после 010.

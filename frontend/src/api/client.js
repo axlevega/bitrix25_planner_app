@@ -60,7 +60,7 @@ export const api = {
     get: () => api.get('/integration-settings'),
     save: (data) => api.post('/integration-settings', data),
   },
-  sync: () => api.post('/sync'),
+  sync: (mode = 'full') => api.post('/sync', { mode }),
   // Плановые записи и загрузка (фаза 2)
   planEntries: {
     list: (params) => api.get('/plan-entries', params),
