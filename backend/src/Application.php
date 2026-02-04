@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace App;
 
+use App\Repository\IntegrationSettingsRepository;
 use App\Router;
 use App\Service\LoadService;
 use App\Service\SyncService;
@@ -63,10 +64,10 @@ final class Application
                 return ['error' => 'Нет задач в кэше, укажите task_id или сначала запустите синхронизацию задач'];
             }
             $url = null;
-            $stmt = $pdo->query('SELECT webhook_token, portal_url FROM integration_settings ORDER BY id LIMIT 1');
-            $row = $stmt->fetch(\PDO::FETCH_ASSOC);
-            if ($row && trim((string) ($row['portal_url'] ?? '')) !== '' && trim((string) ($row['webhook_token'] ?? '')) !== '') {
-                $url = rtrim($row['portal_url'], '/') . '/rest/' . trim($row['webhook_token'], '/') . '/';
+            $repo = new IntegrationSettingsRepository($pdo);
+            $set = $repo->getValues(['portal_url', 'webhook_token']);
+            if (trim((string) ($set['portal_url'] ?? '')) !== '' && trim((string) ($set['webhook_token'] ?? '')) !== '') {
+                $url = rtrim($set['portal_url'], '/') . '/rest/' . trim($set['webhook_token'], '/') . '/';
             }
             if ($url === null) {
                 $url = $_ENV['BITRIX24_WEBHOOK_URL'] ?? getenv('BITRIX24_WEBHOOK_URL') ?: null;
@@ -213,28 +214,61 @@ final class Application
             return ['id' => $id, 'ok' => true];
         });
 
-        // Настройки интеграции (одна запись; токен не отдаём в ответе)
+        // Настройки интеграции: ключ — значение (одна строка БД = одна настройка). Токен не отдаём в ответе.
         $this->router->get('/integration-settings', function (): array {
             $pdo = Database::getConnection();
-            $stmt = $pdo->query('SELECT id, portal_url, sync_interval_minutes, last_sync_at, created_at, updated_at FROM integration_settings ORDER BY id LIMIT 1');
-            $row = $stmt->fetch(\PDO::FETCH_ASSOC);
-            return $row ?: ['portal_url' => '', 'sync_interval_minutes' => 30, 'last_sync_at' => null];
+            $repo = new IntegrationSettingsRepository($pdo);
+            $keys = ['portal_url', 'sync_interval_minutes', 'last_sync_at', 'sync_date_range_type', 'sync_date_from', 'sync_date_to', 'sync_specialist_ids'];
+            $v = $repo->getValues($keys);
+            $out = [
+                'portal_url' => $v['portal_url'] ?? '',
+                'webhook_token' => '', // не отдаём сохранённый токен
+                'sync_interval_minutes' => (int) ($v['sync_interval_minutes'] ?? 30),
+                'last_sync_at' => ($v['last_sync_at'] ?? null) !== '' ? $v['last_sync_at'] : null,
+                'sync_date_range_type' => $v['sync_date_range_type'] ?? 'month',
+                'sync_date_from' => ($v['sync_date_from'] ?? '') !== '' ? $v['sync_date_from'] : null,
+                'sync_date_to' => ($v['sync_date_to'] ?? '') !== '' ? $v['sync_date_to'] : null,
+                'sync_specialist_ids' => [],
+            ];
+            if (isset($v['sync_specialist_ids']) && $v['sync_specialist_ids'] !== '') {
+                $decoded = json_decode($v['sync_specialist_ids'], true);
+                $out['sync_specialist_ids'] = is_array($decoded) ? $decoded : [];
+            }
+            return $out;
         });
         $this->router->post('/integration-settings', function (array $payload): array {
             $pdo = Database::getConnection();
-            $portalUrl = trim((string) ($payload['portal_url'] ?? ''));
-            $webhookToken = trim((string) ($payload['webhook_token'] ?? ''));
-            $interval = isset($payload['sync_interval_minutes']) ? (int) $payload['sync_interval_minutes'] : 30;
-            $stmt = $pdo->query('SELECT id FROM integration_settings LIMIT 1');
-            $row = $stmt->fetch(\PDO::FETCH_ASSOC);
-            if ($row) {
-                $pdo->prepare('UPDATE integration_settings SET portal_url=?, webhook_token=?, sync_interval_minutes=? WHERE id=?')
-                    ->execute([$portalUrl, $webhookToken, $interval, $row['id']]);
-                return ['id' => (int) $row['id'], 'portal_url' => $portalUrl, 'sync_interval_minutes' => $interval];
+            $repo = new IntegrationSettingsRepository($pdo);
+            $allowed = ['portal_url', 'webhook_token', 'sync_interval_minutes', 'sync_date_range_type', 'sync_date_from', 'sync_date_to', 'sync_specialist_ids'];
+            foreach ($allowed as $key) {
+                if (!array_key_exists($key, $payload)) {
+                    continue;
+                }
+                if ($key === 'sync_specialist_ids') {
+                    $val = $payload[$key];
+                    $repo->setValue($key, is_array($val) ? json_encode(array_values(array_map('intval', $val))) : '[]');
+                } elseif ($key === 'sync_date_range_type') {
+                    $val = trim((string) $payload[$key]);
+                    $repo->setValue($key, in_array($val, ['week', 'month', 'half_year', 'year', 'custom'], true) ? $val : 'month');
+                } elseif ($key === 'sync_date_from' || $key === 'sync_date_to') {
+                    $val = isset($payload[$key]) && (string) $payload[$key] !== '' ? trim((string) $payload[$key]) : '';
+                    $repo->setValue($key, $val);
+                } elseif ($key === 'sync_interval_minutes') {
+                    $repo->setValue($key, (string) max(5, min(1440, (int) $payload[$key])));
+                } else {
+                    $repo->setValue($key, trim((string) $payload[$key]));
+                }
             }
-            $pdo->prepare('INSERT INTO integration_settings (portal_url, webhook_token, sync_interval_minutes) VALUES (?, ?, ?)')
-                ->execute([$portalUrl, $webhookToken, $interval]);
-            return ['id' => (int) $pdo->lastInsertId(), 'portal_url' => $portalUrl, 'sync_interval_minutes' => $interval];
+            $v = $repo->getValues(['portal_url', 'sync_interval_minutes', 'sync_date_range_type', 'sync_date_from', 'sync_date_to', 'sync_specialist_ids']);
+            $ids = isset($v['sync_specialist_ids']) && $v['sync_specialist_ids'] !== '' ? (json_decode($v['sync_specialist_ids'], true) ?: []) : [];
+            return [
+                'portal_url' => $v['portal_url'] ?? '',
+                'sync_interval_minutes' => (int) ($v['sync_interval_minutes'] ?? 30),
+                'sync_date_range_type' => $v['sync_date_range_type'] ?? 'month',
+                'sync_date_from' => ($v['sync_date_from'] ?? '') !== '' ? $v['sync_date_from'] : null,
+                'sync_date_to' => ($v['sync_date_to'] ?? '') !== '' ? $v['sync_date_to'] : null,
+                'sync_specialist_ids' => $ids,
+            ];
         });
 
         // Плановые записи (фаза 2)
@@ -452,9 +486,10 @@ final class Application
                 }
             }
             $portalUrl = '';
-            $rowPortal = $pdo->query('SELECT portal_url FROM integration_settings ORDER BY id LIMIT 1')->fetch(\PDO::FETCH_ASSOC);
-            if ($rowPortal && !empty(trim((string) ($rowPortal['portal_url'] ?? '')))) {
-                $portalUrl = rtrim(trim($rowPortal['portal_url']), '/');
+            $repo = new IntegrationSettingsRepository($pdo);
+            $portal = $repo->getValue('portal_url');
+            if ($portal !== null && trim($portal) !== '') {
+                $portalUrl = rtrim(trim($portal), '/');
             }
             if ($b24UserIds === []) {
                 return ['tasks' => [], 'elapsed' => [], 'specialists' => $specialists, 'date_from' => $dateFrom, 'date_to' => $dateTo, 'portal_url' => $portalUrl];
@@ -644,17 +679,22 @@ final class Application
             return ['error' => 'specialist_id or department_id required'];
         });
 
-        // Ручной запуск синхронизации: один чанк за запрос (до 50 задач или 50 пользователей), фронт вызывает в цикле пока has_more
-        $this->router->post('/sync', function (): array {
+        // Ручной запуск синхронизации: один чанк за запрос; фронт вызывает в цикле пока has_more. mode: full|tasks|users
+        $this->router->post('/sync', function (array $payload): array {
             set_time_limit(60);
             $pdo = Database::getConnection();
             $service = new SyncService($pdo);
-            $result = $service->runChunk();
+            $mode = trim((string) ($payload['mode'] ?? 'full'));
+            if (!in_array($mode, [SyncService::MODE_FULL, SyncService::MODE_TASKS, SyncService::MODE_USERS], true)) {
+                $mode = SyncService::MODE_FULL;
+            }
+            $result = $service->runChunk($mode);
             return [
                 'success' => $result['success'],
                 'message' => $result['message'],
                 'tasks_count' => $result['tasks_count'] ?? 0,
                 'users_count' => $result['users_count'] ?? 0,
+                'elapsed_count' => $result['elapsed_count'] ?? 0,
                 'has_more' => $result['has_more'] ?? false,
             ];
         });

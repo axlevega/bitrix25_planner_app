@@ -7,7 +7,12 @@ const settings = ref({
   webhook_token: '',
   sync_interval_minutes: 30,
   last_sync_at: null,
+  sync_date_range_type: 'month',
+  sync_date_from: null,
+  sync_date_to: null,
+  sync_specialist_ids: [],
 })
+const specialists = ref([])
 const loading = ref(true)
 const error = ref(null)
 const saving = ref(false)
@@ -18,13 +23,18 @@ async function load() {
   loading.value = true
   error.value = null
   try {
-    const res = await api.integrationSettings.get()
+    const [res, specRes] = await Promise.all([api.integrationSettings.get(), api.specialists.list()])
     settings.value = {
       portal_url: res.portal_url || '',
-      webhook_token: res.webhook_token ?? '', // бэкенд не отдаёт токен — поле для ввода
+      webhook_token: res.webhook_token ?? '',
       sync_interval_minutes: res.sync_interval_minutes ?? 30,
       last_sync_at: res.last_sync_at ?? null,
+      sync_date_range_type: res.sync_date_range_type ?? 'month',
+      sync_date_from: res.sync_date_from ?? null,
+      sync_date_to: res.sync_date_to ?? null,
+      sync_specialist_ids: Array.isArray(res.sync_specialist_ids) ? res.sync_specialist_ids : [],
     }
+    specialists.value = specRes.items ?? []
   } catch (e) {
     error.value = e.message
   } finally {
@@ -41,6 +51,10 @@ async function save() {
       portal_url: settings.value.portal_url,
       webhook_token: settings.value.webhook_token,
       sync_interval_minutes: settings.value.sync_interval_minutes,
+      sync_date_range_type: settings.value.sync_date_range_type,
+      sync_date_from: settings.value.sync_date_range_type === 'custom' ? settings.value.sync_date_from : null,
+      sync_date_to: settings.value.sync_date_range_type === 'custom' ? settings.value.sync_date_to : null,
+      sync_specialist_ids: settings.value.sync_specialist_ids,
     })
     await load()
   } catch (e) {
@@ -50,21 +64,33 @@ async function save() {
   }
 }
 
-async function runSync() {
+function toggleSpecialist(id) {
+  const ids = settings.value.sync_specialist_ids
+  const numId = Number(id)
+  if (ids.includes(numId)) {
+    settings.value.sync_specialist_ids = ids.filter((i) => i !== numId)
+  } else {
+    settings.value.sync_specialist_ids = [...ids, numId]
+  }
+}
+
+async function runSync(mode = 'full') {
   syncing.value = true
   error.value = null
   syncResult.value = null
   let totalTasks = 0
   let totalUsers = 0
+  let totalElapsed = 0
   try {
     let res
     do {
-      res = await api.sync()
+      res = await api.sync(mode)
       if (res.success) {
         totalTasks += res.tasks_count ?? 0
         totalUsers += res.users_count ?? 0
+        totalElapsed += res.elapsed_count ?? 0
         if (res.has_more) {
-          syncResult.value = { success: true, message: res.message, in_progress: true, tasks_count: totalTasks, users_count: totalUsers }
+          syncResult.value = { success: true, message: res.message, in_progress: true, tasks_count: totalTasks, users_count: totalUsers, elapsed_count: totalElapsed }
         }
       } else {
         syncResult.value = res
@@ -72,7 +98,11 @@ async function runSync() {
       }
     } while (res.has_more)
     if (res && res.success && !res.has_more) {
-      syncResult.value = { success: true, message: 'Синхронизация завершена', tasks_count: totalTasks, users_count: totalUsers }
+      const parts = []
+      if (totalTasks > 0) parts.push(`задач: ${totalTasks}`)
+      if (totalUsers > 0) parts.push(`пользователей: ${totalUsers}`)
+      if (totalElapsed > 0) parts.push(`учёт времени: ${totalElapsed}`)
+      syncResult.value = { success: true, message: 'Синхронизация завершена' + (parts.length ? '. ' + parts.join(', ') : ''), tasks_count: totalTasks, users_count: totalUsers, elapsed_count: totalElapsed }
     }
     await load()
   } catch (e) {
@@ -104,7 +134,7 @@ onMounted(load)
     <p v-if="error" class="error">{{ error }}</p>
     <p v-if="syncResult" class="sync-result" :class="{ 'sync-result--ok': syncResult.success, 'sync-result--err': !syncResult.success }">
       <template v-if="syncResult.success">
-        {{ syncResult.in_progress ? syncResult.message + '…' : (syncResult.message + (syncResult.tasks_count != null || syncResult.users_count != null ? ` Задач: ${syncResult.tasks_count ?? 0}, пользователей: ${syncResult.users_count ?? 0}` : '')) }}
+        {{ syncResult.in_progress ? syncResult.message + '…' : syncResult.message }}
       </template>
       <template v-else>{{ syncResult.message }}</template>
     </p>
@@ -143,6 +173,62 @@ onMounted(load)
               class="input"
             />
           </label>
+
+          <div class="form__block">
+            <span class="form__block-title">Диапазон дат для синхронизации задач</span>
+            <div class="form__radios">
+              <label class="form__radio">
+                <input v-model="settings.sync_date_range_type" type="radio" value="week" />
+                <span>Последняя неделя</span>
+              </label>
+              <label class="form__radio">
+                <input v-model="settings.sync_date_range_type" type="radio" value="month" />
+                <span>Месяц</span>
+              </label>
+              <label class="form__radio">
+                <input v-model="settings.sync_date_range_type" type="radio" value="half_year" />
+                <span>Полгода</span>
+              </label>
+              <label class="form__radio">
+                <input v-model="settings.sync_date_range_type" type="radio" value="year" />
+                <span>Год</span>
+              </label>
+              <label class="form__radio">
+                <input v-model="settings.sync_date_range_type" type="radio" value="custom" />
+                <span>Свой диапазон</span>
+              </label>
+            </div>
+            <div v-if="settings.sync_date_range_type === 'custom'" class="form__custom-dates">
+              <label>
+                <span>С</span>
+                <input v-model="settings.sync_date_from" type="date" class="input" />
+              </label>
+              <label>
+                <span>По</span>
+                <input v-model="settings.sync_date_to" type="date" class="input" />
+              </label>
+            </div>
+          </div>
+
+          <div class="form__block">
+            <span class="form__block-title">Специалисты для синхронизации задач</span>
+            <small>Выберите, по кому загружать задачи из Bitrix24. Пусто — по всем пользователям.</small>
+            <div class="specialists-checkboxes">
+              <label
+                v-for="s in specialists"
+                :key="s.id"
+                class="form__checkbox"
+              >
+                <input
+                  type="checkbox"
+                  :checked="settings.sync_specialist_ids.includes(Number(s.id))"
+                  @change="toggleSpecialist(s.id)"
+                />
+                <span>{{ s.name }}{{ s.department_name ? ` (${s.department_name})` : '' }}</span>
+              </label>
+            </div>
+          </div>
+
           <div class="form__actions">
             <button type="submit" class="btn btn--primary" :disabled="saving">
               {{ saving ? 'Сохранение…' : 'Сохранить настройки' }}
@@ -156,14 +242,33 @@ onMounted(load)
         <p class="sync-desc">
           Последняя синхронизация: <strong>{{ lastSyncText() }}</strong>
         </p>
-        <button
-          type="button"
-          class="btn btn--primary btn--sync"
-          :disabled="syncing"
-          @click="runSync"
-        >
-          {{ syncing ? 'Синхронизация…' : 'Синхронизировать сейчас' }}
-        </button>
+        <p class="sync-desc sync-desc--hint">Сотрудников можно подгружать отдельно; задачи и учёт времени — с учётом выбранного диапазона дат и списка специалистов.</p>
+        <div class="sync-buttons">
+          <button
+            type="button"
+            class="btn btn--primary btn--sync"
+            :disabled="syncing"
+            @click="runSync('users')"
+          >
+            {{ syncing ? 'Синхронизация…' : 'Синхронизировать сотрудников' }}
+          </button>
+          <button
+            type="button"
+            class="btn btn--outline btn--sync"
+            :disabled="syncing"
+            @click="runSync('tasks')"
+          >
+            {{ syncing ? 'Синхронизация…' : 'Синхронизировать задачи' }}
+          </button>
+          <button
+            type="button"
+            class="btn btn--outline btn--sync"
+            :disabled="syncing"
+            @click="runSync('full')"
+          >
+            {{ syncing ? 'Синхронизация…' : 'Всё подряд (задачи → сотрудники → учёт времени)' }}
+          </button>
+        </div>
       </section>
     </template>
   </div>
@@ -210,7 +315,7 @@ onMounted(load)
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  max-width: 480px;
+  max-width: 560px;
 }
 .form--vertical label {
   display: flex;
@@ -221,6 +326,50 @@ onMounted(load)
 .form--vertical small {
   color: #64748b;
   font-size: 0.8rem;
+}
+.form__block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.form__block-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.form__radios {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+}
+.form__radio {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+.form__custom-dates {
+  display: flex;
+  gap: 1rem;
+  margin-top: 0.25rem;
+}
+.form__custom-dates label {
+  flex: 1;
+}
+.form__checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+.specialists-checkboxes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 0.5rem 0;
 }
 .form__actions {
   margin-top: 0.5rem;
@@ -243,9 +392,24 @@ onMounted(load)
   color: #fff;
   border-color: var(--color-primary);
 }
+.btn--outline {
+  background: #fff;
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
 .btn:disabled {
   opacity: 0.7;
   cursor: not-allowed;
+}
+.sync-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.sync-desc--hint {
+  font-size: 0.85rem;
+  color: #64748b;
+  margin-bottom: 0.5rem;
 }
 .sync-section {
   background: #fff;

@@ -4,13 +4,14 @@ declare(strict_types=1);
 namespace App\Service;
 
 use App\Bitrix24\Client;
-use App\Database;
+use App\Repository\IntegrationSettingsRepository;
 use PDO;
 
 /**
  * Синхронизация задач, пользователей и учёта времени по задачам из Bitrix24.
  * Постранично: задачи → пользователи → elapsed по задачам (task.elapseditem.getlist).
  * phase: 0=tasks, 1=users, 2=elapsed, 3=idle.
+ * Режимы: full (всё подряд), tasks (только задачи + elapsed), users (только пользователи).
  */
 final class SyncService
 {
@@ -18,19 +19,26 @@ final class SyncService
     private const PAGE_SIZE = 50;
     private const ELAPSED_TASKS_PER_CHUNK = 10;
 
+    public const MODE_FULL = 'full';
+    public const MODE_TASKS = 'tasks';
+    public const MODE_USERS = 'users';
+
     private PDO $pdo;
+    private IntegrationSettingsRepository $settings;
     private ?string $webhookUrl = null;
 
     public function __construct(PDO $pdo, ?string $webhookUrl = null)
     {
         $this->pdo = $pdo;
+        $this->settings = new IntegrationSettingsRepository($pdo);
         $this->webhookUrl = $webhookUrl;
     }
 
     /**
      * Один чанк синхронизации. Возвращает has_more, counts и т.д.
+     * @param string $mode full|tasks|users — полная, только задачи+elapsed, только сотрудники
      */
-    public function runChunk(): array
+    public function runChunk(string $mode = self::MODE_FULL): array
     {
         $url = $this->webhookUrl ?? $this->getWebhookFromSettings();
         if ($url === '' || $url === null) {
@@ -43,8 +51,21 @@ final class SyncService
         $usersOffset = (int) $state['sync_users_offset'];
         $elapsedOffset = (int) ($state['sync_elapsed_task_offset'] ?? 0);
 
-        // Новый цикл синхронизации (phase 3 = idle)
-        if ($phase === 3) {
+        // При выборе режима «только сотрудники»/«только задачи» — сбрасываем на нужную фазу, если сейчас не в ней (иначе при phase=0 запустились бы задачи вместо сотрудников).
+        // В цикле (has_more) фронт шлёт тот же mode — не сбрасываем, продолжаем с текущей фазы.
+        if ($mode === self::MODE_USERS && $phase !== 1) {
+            $phase = 1;
+            $tasksOffset = 0;
+            $usersOffset = 0;
+            $elapsedOffset = 0;
+            $this->setSyncState($phase, $tasksOffset, $usersOffset, $elapsedOffset);
+        } elseif ($mode === self::MODE_TASKS && $phase !== 0 && $phase !== 2) {
+            $phase = 0;
+            $tasksOffset = 0;
+            $usersOffset = 0;
+            $elapsedOffset = 0;
+            $this->setSyncState($phase, $tasksOffset, $usersOffset, $elapsedOffset);
+        } elseif ($mode === self::MODE_FULL && $phase === 3) {
             $phase = 0;
             $tasksOffset = 0;
             $usersOffset = 0;
@@ -59,11 +80,15 @@ final class SyncService
         $usersCount = 0;
 
         if ($phase === 0) {
-            $daysBack = (int) ($_ENV['TASKS_DAYS_BACK'] ?? getenv('TASKS_DAYS_BACK') ?: self::TASKS_DAYS_BACK_DEFAULT);
-            if ($daysBack < 1) {
-                $daysBack = self::TASKS_DAYS_BACK_DEFAULT;
+            [$dateFrom, $dateTo] = $this->getSyncDateRange();
+            $filter = ['>=CREATED_DATE' => $dateFrom];
+            if ($dateTo !== null) {
+                $filter['<=CREATED_DATE'] = $dateTo;
             }
-            $filter = ['>=CREATED_DATE' => date('Y-m-d', strtotime('-' . $daysBack . ' days'))];
+            $responsibleIds = $this->getSyncResponsibleIds();
+            if ($responsibleIds !== []) {
+                $filter['RESPONSIBLE_ID'] = implode(',', $responsibleIds);
+            }
             $tasksResult = $client->callOnePage('tasks.task.list', 'tasks', $tasksOffset, self::PAGE_SIZE, $taskSelect, $filter);
             if (!empty($tasksResult['error'])) {
                 return [
@@ -87,13 +112,13 @@ final class SyncService
             if ($tasksCount >= self::PAGE_SIZE) {
                 $tasksOffset += $tasksCount;
             } else {
-                $phase = 1;
                 $tasksOffset = 0;
+                $phase = ($mode === self::MODE_TASKS) ? 2 : 1;
             }
             $this->setSyncState($phase, $tasksOffset, $usersOffset, $elapsedOffset);
             return [
                 'success' => true,
-                'message' => $phase === 1 ? 'Задачи загружены, далее пользователи' : 'Чанк задач',
+                'message' => $phase === 2 ? 'Задачи загружены, далее учёт времени' : ($phase === 1 ? 'Задачи загружены, далее пользователи' : 'Чанк задач'),
                 'tasks_count' => $tasksCount,
                 'users_count' => 0,
                 'elapsed_count' => 0,
@@ -126,6 +151,18 @@ final class SyncService
                     'users_count' => $usersCount,
                     'elapsed_count' => 0,
                     'has_more' => true,
+                ];
+            }
+            if ($mode === self::MODE_USERS) {
+                $this->updateLastSyncAt(date('Y-m-d H:i:s'));
+                $this->setSyncState(3, 0, 0, 0);
+                return [
+                    'success' => true,
+                    'message' => 'Синхронизация сотрудников завершена',
+                    'tasks_count' => 0,
+                    'users_count' => $usersCount,
+                    'elapsed_count' => 0,
+                    'has_more' => false,
                 ];
             }
             $phase = 2;
@@ -195,57 +232,86 @@ final class SyncService
 
     private function getSyncState(): array
     {
-        try {
-            $stmt = $this->pdo->query('SELECT * FROM integration_settings LIMIT 1');
-            $row = $stmt ? $stmt->fetch(PDO::FETCH_ASSOC) : false;
-        } catch (\Throwable $e) {
-            $row = false;
-        }
-        if (!$row) {
-            return ['sync_phase' => 3, 'sync_tasks_offset' => 0, 'sync_users_offset' => 0, 'sync_elapsed_task_offset' => 0];
-        }
+        $v = $this->settings->getValues(['sync_phase', 'sync_tasks_offset', 'sync_users_offset', 'sync_elapsed_task_offset']);
         return [
-            'sync_phase' => (int) ($row['sync_phase'] ?? 3),
-            'sync_tasks_offset' => (int) ($row['sync_tasks_offset'] ?? 0),
-            'sync_users_offset' => (int) ($row['sync_users_offset'] ?? 0),
-            'sync_elapsed_task_offset' => (int) ($row['sync_elapsed_task_offset'] ?? 0),
+            'sync_phase' => (int) ($v['sync_phase'] ?? 3),
+            'sync_tasks_offset' => (int) ($v['sync_tasks_offset'] ?? 0),
+            'sync_users_offset' => (int) ($v['sync_users_offset'] ?? 0),
+            'sync_elapsed_task_offset' => (int) ($v['sync_elapsed_task_offset'] ?? 0),
         ];
     }
 
     private function setSyncState(int $phase, int $tasksOffset, int $usersOffset, int $elapsedOffset = 0): void
     {
-        try {
-            $stmt = $this->pdo->query('SELECT id FROM integration_settings LIMIT 1');
-            $row = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($row) {
-                try {
-                    $this->pdo->prepare('UPDATE integration_settings SET sync_phase = ?, sync_tasks_offset = ?, sync_users_offset = ?, sync_elapsed_task_offset = ? WHERE id = ?')
-                        ->execute([$phase, $tasksOffset, $usersOffset, $elapsedOffset, $row['id']]);
-                } catch (\Throwable $e) {
-                    $this->pdo->prepare('UPDATE integration_settings SET sync_phase = ?, sync_tasks_offset = ?, sync_users_offset = ? WHERE id = ?')
-                        ->execute([$phase, $tasksOffset, $usersOffset, $row['id']]);
-                }
-            }
-        } catch (\Throwable $e) {
-            // колонки могут отсутствовать до применения миграции 002/006
-        }
+        $this->settings->setValue('sync_phase', (string) $phase);
+        $this->settings->setValue('sync_tasks_offset', (string) $tasksOffset);
+        $this->settings->setValue('sync_users_offset', (string) $usersOffset);
+        $this->settings->setValue('sync_elapsed_task_offset', (string) $elapsedOffset);
     }
 
     private function getWebhookFromSettings(): ?string
     {
-        $stmt = $this->pdo->query('SELECT webhook_token, portal_url FROM integration_settings ORDER BY id LIMIT 1');
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
-        if (!$row) {
-            return getenv('BITRIX24_WEBHOOK_URL') ?: null;
-        }
-        $token = trim((string) ($row['webhook_token'] ?? ''));
-        $portal = trim((string) ($row['portal_url'] ?? ''));
+        $v = $this->settings->getValues(['portal_url', 'webhook_token']);
+        $token = trim((string) ($v['webhook_token'] ?? ''));
+        $portal = trim((string) ($v['portal_url'] ?? ''));
         if ($token !== '' && $portal !== '') {
-            $base = rtrim($portal, '/');
-            $path = trim($token, '/');
-            return $base . '/rest/' . $path . '/';
+            return rtrim($portal, '/') . '/rest/' . trim($token, '/') . '/';
         }
         return getenv('BITRIX24_WEBHOOK_URL') ?: null;
+    }
+
+    /**
+     * Диапазон дат для фильтра задач по CREATED_DATE из настроек.
+     * @return array{0: string, 1: string|null} [dateFrom Y-m-d, dateTo Y-m-d или null]
+     */
+    private function getSyncDateRange(): array
+    {
+        $v = $this->settings->getValues(['sync_date_range_type', 'sync_date_from', 'sync_date_to']);
+        $type = trim((string) ($v['sync_date_range_type'] ?? ''));
+        $customFrom = isset($v['sync_date_from']) && $v['sync_date_from'] !== '' ? trim($v['sync_date_from']) : null;
+        $customTo = isset($v['sync_date_to']) && $v['sync_date_to'] !== '' ? trim($v['sync_date_to']) : null;
+
+        if ($type === 'custom' && $customFrom !== null && $customFrom !== '') {
+            return [$customFrom, $customTo ?: $customFrom];
+        }
+
+        $today = date('Y-m-d');
+        switch ($type) {
+            case 'week':
+                return [date('Y-m-d', strtotime('-7 days')), $today];
+            case 'month':
+                return [date('Y-m-d', strtotime('-1 month')), $today];
+            case 'half_year':
+                return [date('Y-m-d', strtotime('-6 months')), $today];
+            case 'year':
+                return [date('Y-m-d', strtotime('-1 year')), $today];
+            default:
+                $daysBack = (int) ($_ENV['TASKS_DAYS_BACK'] ?? getenv('TASKS_DAYS_BACK') ?: self::TASKS_DAYS_BACK_DEFAULT);
+                if ($daysBack < 1) {
+                    $daysBack = self::TASKS_DAYS_BACK_DEFAULT;
+                }
+                return [date('Y-m-d', strtotime('-' . $daysBack . ' days')), null];
+        }
+    }
+
+    /**
+     * Список bitrix24_user_id выбранных специалистов для фильтра задач (пустой = не фильтровать).
+     * @return list<string>
+     */
+    private function getSyncResponsibleIds(): array
+    {
+        $raw = $this->settings->getValue('sync_specialist_ids');
+        if ($raw === null || $raw === '') {
+            return [];
+        }
+        $ids = json_decode($raw, true);
+        if (!is_array($ids) || $ids === []) {
+            return [];
+        }
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $stmt = $this->pdo->prepare('SELECT bitrix24_user_id FROM specialists WHERE id IN (' . $placeholders . ') AND bitrix24_user_id IS NOT NULL AND bitrix24_user_id != ""');
+        $stmt->execute(array_map('intval', $ids));
+        return $stmt->fetchAll(PDO::FETCH_COLUMN);
     }
 
     private function insertSyncLog(string $startedAt, string $status, ?string $message, ?int $tasksCount): int
@@ -276,11 +342,7 @@ final class SyncService
 
     private function updateLastSyncAt(string $at): void
     {
-        $stmt = $this->pdo->query('SELECT id FROM integration_settings LIMIT 1');
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
-        if ($row) {
-            $this->pdo->prepare('UPDATE integration_settings SET last_sync_at = ? WHERE id = ?')->execute([$at, $row['id']]);
-        }
+        $this->settings->setValue('last_sync_at', $at);
     }
 
     private function upsertTasks(array $tasks): void
