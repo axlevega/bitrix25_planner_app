@@ -53,7 +53,7 @@ final class SyncService
         }
 
         $client = new Client($url);
-        $taskSelect = ['ID', 'TITLE', 'RESPONSIBLE_ID', 'DEADLINE', 'TIME_ESTIMATE', 'TIME_SPENT', 'STATUS', 'GROUP_ID'];
+        $taskSelect = ['ID', 'TITLE', 'RESPONSIBLE_ID', 'DEADLINE', 'TIME_ESTIMATE', 'TIME_SPENT', 'STATUS', 'GROUP_ID', 'START_DATE_PLAN', 'END_DATE_PLAN', 'CREATED_DATE'];
         $userSelect = ['ID', 'NAME', 'EMAIL'];
         $tasksCount = 0;
         $usersCount = 0;
@@ -287,10 +287,11 @@ final class SyncService
     {
         $syncedAt = date('Y-m-d H:i:s');
         $stmt = $this->pdo->prepare(
-            'INSERT INTO bitrix24_tasks_cache (bitrix24_task_id, title, responsible_user_id, deadline, time_estimate, time_spent, status, group_id, synced_at, raw_json)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            'INSERT INTO bitrix24_tasks_cache (bitrix24_task_id, title, responsible_user_id, deadline, time_estimate, time_spent, status, group_id, start_date_plan, end_date_plan, created_date, synced_at, raw_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE title = VALUES(title), responsible_user_id = VALUES(responsible_user_id), deadline = VALUES(deadline),
-             time_estimate = VALUES(time_estimate), time_spent = VALUES(time_spent), status = VALUES(status), group_id = VALUES(group_id), synced_at = VALUES(synced_at), raw_json = VALUES(raw_json)'
+             time_estimate = VALUES(time_estimate), time_spent = VALUES(time_spent), status = VALUES(status), group_id = VALUES(group_id),
+             start_date_plan = VALUES(start_date_plan), end_date_plan = VALUES(end_date_plan), created_date = VALUES(created_date), synced_at = VALUES(synced_at), raw_json = VALUES(raw_json)'
         );
 
         foreach ($tasks as $t) {
@@ -305,6 +306,9 @@ final class SyncService
             $timeSpent = $t['timeSpent'] ?? $t['TIME_SPENT'] ?? null;
             $status = $t['status'] ?? $t['STATUS'] ?? null;
             $groupId = $t['groupId'] ?? $t['GROUP_ID'] ?? null;
+            $startDatePlan = $this->parseDate($t['startDatePlan'] ?? $t['START_DATE_PLAN'] ?? null);
+            $endDatePlan = $this->parseDate($t['endDatePlan'] ?? $t['END_DATE_PLAN'] ?? null);
+            $createdDate = $this->parseDate($t['createdDate'] ?? $t['CREATED_DATE'] ?? null);
             $rawJson = json_encode($t);
             $stmt->execute([
                 (string) $id,
@@ -315,6 +319,9 @@ final class SyncService
                 $timeSpent !== null ? (int) $timeSpent : null,
                 $status !== null ? (string) $status : null,
                 $groupId !== null ? (string) $groupId : null,
+                $startDatePlan,
+                $endDatePlan,
+                $createdDate,
                 $syncedAt,
                 $rawJson,
             ]);

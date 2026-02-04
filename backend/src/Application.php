@@ -471,10 +471,157 @@ final class Application
                 return ['tasks' => [], 'elapsed' => [], 'specialists' => $specialists, 'date_from' => $dateFrom, 'date_to' => $dateTo, 'portal_url' => $portalUrl];
             }
             $phTask = implode(',', array_fill(0, count($taskIdsInPeriod), '?'));
-            $stmt = $pdo->prepare("SELECT bitrix24_task_id, title, responsible_user_id, deadline, time_estimate, time_spent, group_id FROM bitrix24_tasks_cache WHERE bitrix24_task_id IN ($phTask) ORDER BY deadline, bitrix24_task_id");
+            $stmt = $pdo->prepare("SELECT bitrix24_task_id, title, responsible_user_id, deadline, time_estimate, time_spent, group_id, start_date_plan, end_date_plan, created_date FROM bitrix24_tasks_cache WHERE bitrix24_task_id IN ($phTask) ORDER BY deadline, bitrix24_task_id");
             $stmt->execute($taskIdsInPeriod);
             $tasks = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+
+            $overrides = [];
+            $dailyByTask = [];
+            if ($tasks !== []) {
+                $stmt = $pdo->prepare("SELECT bitrix24_task_id, plan_start_date, plan_end_date, original_plan_start, original_plan_end, original_time_estimate FROM task_plan_override WHERE bitrix24_task_id IN ($phTask)");
+                $stmt->execute($taskIdsInPeriod);
+                while ($row = $stmt->fetch(\PDO::FETCH_ASSOC)) {
+                    $overrides[$row['bitrix24_task_id']] = $row;
+                }
+                $stmt = $pdo->prepare("SELECT bitrix24_task_id, plan_date, planned_hours FROM task_plan_daily WHERE bitrix24_task_id IN ($phTask) AND plan_date >= ? AND plan_date <= ?");
+                $stmt->execute(array_merge($taskIdsInPeriod, [$dateFrom, $dateTo]));
+                while ($row = $stmt->fetch(\PDO::FETCH_ASSOC)) {
+                    $tid = $row['bitrix24_task_id'];
+                    if (!isset($dailyByTask[$tid])) {
+                        $dailyByTask[$tid] = [];
+                    }
+                    $dailyByTask[$tid][$row['plan_date']] = (float) $row['planned_hours'];
+                }
+            }
+
+            foreach ($tasks as &$task) {
+                $tid = $task['bitrix24_task_id'];
+                $override = $overrides[$tid] ?? null;
+                $dailyMap = $dailyByTask[$tid] ?? [];
+                $task['has_plan_override'] = $override !== null;
+                if ($override !== null) {
+                    $task['original_plan_hours_by_date'] = self::computePlanHoursByDateWithRange(
+                        $override['original_plan_start'],
+                        $override['original_plan_end'],
+                        (int) $override['original_time_estimate'],
+                        $dateFrom,
+                        $dateTo
+                    );
+                    $replanStart = $override['plan_start_date'] ?? $override['original_plan_start'];
+                    $replanEnd = $override['plan_end_date'] ?? $override['original_plan_end'];
+                    $baseReplan = self::computePlanHoursByDateWithRange(
+                        $replanStart,
+                        $replanEnd,
+                        (int) $task['time_estimate'],
+                        $dateFrom,
+                        $dateTo
+                    );
+                } else {
+                    $task['original_plan_hours_by_date'] = [];
+                    $baseReplan = self::computePlanHoursByDate($task, $dateFrom, $dateTo);
+                }
+                $task['plan_hours_by_date'] = $baseReplan;
+                foreach ($dailyMap as $d => $h) {
+                    $task['plan_hours_by_date'][$d] = round($h, 1);
+                }
+            }
+            unset($task);
             return ['tasks' => $tasks, 'elapsed' => $elapsed, 'specialists' => $specialists, 'date_from' => $dateFrom, 'date_to' => $dateTo, 'portal_url' => $portalUrl];
+        });
+
+        // GET task-plan: исходный план и переплан по задаче (query: bitrix24_task_id)
+        $this->router->get('/task-plan', function (array $payload): array {
+            $pdo = Database::getConnection();
+            $taskId = trim((string) ($payload['bitrix24_task_id'] ?? ''));
+            if ($taskId === '') {
+                return ['error' => 'bitrix24_task_id required'];
+            }
+            $task = $pdo->prepare("SELECT bitrix24_task_id, title, responsible_user_id, deadline, time_estimate, time_spent, start_date_plan, end_date_plan, created_date FROM bitrix24_tasks_cache WHERE bitrix24_task_id = ?");
+            $task->execute([$taskId]);
+            $task = $task->fetch(\PDO::FETCH_ASSOC);
+            if (!$task) {
+                return ['error' => 'Task not found'];
+            }
+            $override = $pdo->prepare("SELECT plan_start_date, plan_end_date, original_plan_start, original_plan_end, original_time_estimate FROM task_plan_override WHERE bitrix24_task_id = ?");
+            $override->execute([$taskId]);
+            $override = $override->fetch(\PDO::FETCH_ASSOC);
+            $daily = $pdo->prepare("SELECT plan_date, planned_hours FROM task_plan_daily WHERE bitrix24_task_id = ? ORDER BY plan_date");
+            $daily->execute([$taskId]);
+            $planHoursByDate = [];
+            while ($row = $daily->fetch(\PDO::FETCH_ASSOC)) {
+                $planHoursByDate[$row['plan_date']] = (float) $row['planned_hours'];
+            }
+            $original = [
+                'plan_start' => ($override !== null ? $override['original_plan_start'] : null) ?? self::dateOnly($task['start_date_plan'] ?? null) ?? self::dateOnly($task['created_date'] ?? null),
+                'plan_end' => ($override !== null ? $override['original_plan_end'] : null) ?? self::dateOnly($task['end_date_plan'] ?? null) ?? self::dateOnly($task['deadline'] ?? null),
+                'time_estimate' => $override !== null ? (int) $override['original_time_estimate'] : (int) $task['time_estimate'],
+            ];
+            $replanned = [
+                'plan_start' => $override['plan_start_date'] ?? $original['plan_start'],
+                'plan_end' => $override['plan_end_date'] ?? $original['plan_end'],
+                'plan_hours_by_date' => $planHoursByDate,
+            ];
+            return ['task' => $task, 'original' => $original, 'replanned' => $replanned, 'has_plan_override' => $override !== null];
+        });
+
+        // PUT task-plan: сохранение переплана (body: bitrix24_task_id, plan_start_date?, plan_end_date?, plan_hours_by_date?)
+        $this->router->put('/task-plan', function (array $payload): array {
+            $pdo = Database::getConnection();
+            $taskId = trim((string) ($payload['bitrix24_task_id'] ?? ''));
+            if ($taskId === '') {
+                return ['error' => 'bitrix24_task_id required'];
+            }
+            $task = $pdo->prepare("SELECT bitrix24_task_id, time_estimate, start_date_plan, end_date_plan, created_date, deadline FROM bitrix24_tasks_cache WHERE bitrix24_task_id = ?");
+            $task->execute([$taskId]);
+            $task = $task->fetch(\PDO::FETCH_ASSOC);
+            if (!$task) {
+                return ['error' => 'Task not found'];
+            }
+            $planStart = self::dateOnly($payload['plan_start_date'] ?? null);
+            $planEnd = self::dateOnly($payload['plan_end_date'] ?? null);
+            $planHoursByDate = $payload['plan_hours_by_date'] ?? [];
+            if (!is_array($planHoursByDate)) {
+                $planHoursByDate = [];
+            }
+
+            $override = $pdo->prepare("SELECT original_plan_start, original_plan_end, original_time_estimate FROM task_plan_override WHERE bitrix24_task_id = ?");
+            $override->execute([$taskId]);
+            $override = $override->fetch(\PDO::FETCH_ASSOC);
+            $isFirst = $override === null;
+            if ($isFirst) {
+                $originalStart = self::dateOnly($task['start_date_plan'] ?? null) ?? self::dateOnly($task['created_date'] ?? null);
+                $originalEnd = self::dateOnly($task['end_date_plan'] ?? null) ?? self::dateOnly($task['deadline'] ?? null);
+                $originalEst = (int) $task['time_estimate'];
+            } else {
+                $originalStart = $override['original_plan_start'];
+                $originalEnd = $override['original_plan_end'];
+                $originalEst = (int) $override['original_time_estimate'];
+            }
+            if ($planStart === null) {
+                $planStart = $originalStart;
+            }
+            if ($planEnd === null) {
+                $planEnd = $originalEnd;
+            }
+
+            $pdo->prepare("INSERT INTO task_plan_override (bitrix24_task_id, plan_start_date, plan_end_date, original_plan_start, original_plan_end, original_time_estimate) VALUES (?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE plan_start_date = VALUES(plan_start_date), plan_end_date = VALUES(plan_end_date)")
+                ->execute([$taskId, $planStart, $planEnd, $originalStart, $originalEnd, $originalEst]);
+
+            $pdo->prepare("DELETE FROM task_plan_daily WHERE bitrix24_task_id = ?")->execute([$taskId]);
+            $ins = $pdo->prepare("INSERT INTO task_plan_daily (bitrix24_task_id, plan_date, planned_hours) VALUES (?, ?, ?)");
+            foreach ($planHoursByDate as $date => $hours) {
+                if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) $date)) {
+                    continue;
+                }
+                $h = (float) $hours;
+                if ($h < 0) {
+                    continue;
+                }
+                $ins->execute([$taskId, $date, $h]);
+            }
+
+            return ['success' => true, 'bitrix24_task_id' => $taskId];
         });
 
         // Расчёт загрузки за период (фаза 2): specialist_id или department_id, date_from, date_to
@@ -535,5 +682,85 @@ final class Application
     {
         http_response_code($status);
         echo json_encode($data, JSON_UNESCAPED_UNICODE);
+    }
+
+    /**
+     * Распределение планируемых трудозатрат по дням: план_начало = start_date_plan или created_date,
+     * план_окончание = end_date_plan или deadline; время (time_estimate, мин) равномерно по дням.
+     *
+     * @return array<string, float> дата Y-m-d => часы
+     */
+    private static function computePlanHoursByDate(array $task, string $periodFrom, string $periodTo): array
+    {
+        $planStart = self::dateOnly($task['start_date_plan'] ?? null) ?? self::dateOnly($task['created_date'] ?? null);
+        $planEnd = self::dateOnly($task['end_date_plan'] ?? null) ?? self::dateOnly($task['deadline'] ?? null);
+        if ($planStart === null || $planEnd === null) {
+            return [];
+        }
+        $estimate = (int) ($task['time_estimate'] ?? 0);
+        if ($estimate <= 0) {
+            return [];
+        }
+        $totalHours = $estimate >= 10000 ? $estimate / 3600.0 : $estimate / 60.0;
+        $start = new \DateTimeImmutable($planStart);
+        $end = new \DateTimeImmutable($planEnd);
+        if ($start > $end) {
+            $start = $end;
+            $end = new \DateTimeImmutable($planStart);
+        }
+        $daysCount = $start->diff($end)->days + 1;
+        $hoursPerDay = $totalHours / max(1, $daysCount);
+        $result = [];
+        $periodStart = new \DateTimeImmutable($periodFrom);
+        $periodEnd = new \DateTimeImmutable($periodTo);
+        $cursor = $start;
+        while ($cursor <= $end && $cursor <= $periodEnd) {
+            if ($cursor >= $periodStart) {
+                $result[$cursor->format('Y-m-d')] = round($hoursPerDay, 1);
+            }
+            $cursor = $cursor->modify('+1 day');
+        }
+        return $result;
+    }
+
+    /**
+     * Распределение плановых часов по дням при заданных датах и оценке в минутах.
+     *
+     * @return array<string, float> дата Y-m-d => часы
+     */
+    private static function computePlanHoursByDateWithRange(?string $planStart, ?string $planEnd, int $estimateMinutes, string $periodFrom, string $periodTo): array
+    {
+        if ($planStart === null || $planEnd === null || $estimateMinutes <= 0) {
+            return [];
+        }
+        $totalHours = $estimateMinutes >= 10000 ? $estimateMinutes / 3600.0 : $estimateMinutes / 60.0;
+        $start = new \DateTimeImmutable($planStart);
+        $end = new \DateTimeImmutable($planEnd);
+        if ($start > $end) {
+            $start = new \DateTimeImmutable($planEnd);
+            $end = new \DateTimeImmutable($planStart);
+        }
+        $daysCount = $start->diff($end)->days + 1;
+        $hoursPerDay = $totalHours / max(1, $daysCount);
+        $result = [];
+        $periodStart = new \DateTimeImmutable($periodFrom);
+        $periodEnd = new \DateTimeImmutable($periodTo);
+        $cursor = $start;
+        while ($cursor <= $end && $cursor <= $periodEnd) {
+            if ($cursor >= $periodStart) {
+                $result[$cursor->format('Y-m-d')] = round($hoursPerDay, 1);
+            }
+            $cursor = $cursor->modify('+1 day');
+        }
+        return $result;
+    }
+
+    private static function dateOnly(?string $dt): ?string
+    {
+        if ($dt === null || $dt === '') {
+            return null;
+        }
+        $ts = strtotime($dt);
+        return $ts ? date('Y-m-d', $ts) : null;
     }
 }
