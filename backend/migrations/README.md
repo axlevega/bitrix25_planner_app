@@ -25,3 +25,5 @@
 - **005_task_elapsed.sql** — учёт времени по задачам B24 по дням: bitrix24_task_id, bitrix24_user_id, elapsed_date, minutes (для сетки планирования).
 - **006_sync_elapsed_state.sql** — колонка sync_elapsed_task_offset в integration_settings для фазы синхронизации elapsed (phase 2).
 - **007_task_plan_dates.sql** — колонки start_date_plan, end_date_plan, created_date в bitrix24_tasks_cache для расчёта планируемых трудозатрат по дням (план/факт в сетке).
+- **008_task_plan_override.sql** — переплан ПМ: даты переплана и снимок исходных дат/оценки из B24.
+- **009_task_plan_daily.sql** — скорректированные плановые часы по дням (task_id, plan_date, planned_hours).

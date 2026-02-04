@@ -15,6 +15,20 @@ const error = ref(null)
 /** Скрыть задачи без планового времени (time_estimate); по умолчанию включено */
 const hideTasksWithoutPlan = ref(true)
 
+/** Модалка переплана */
+const showReplanModal = ref(false)
+const replanTaskId = ref('')
+const replanTaskTitle = ref('')
+const taskPlanData = ref(null)
+const taskPlanLoading = ref(false)
+const taskPlanSaving = ref(false)
+const taskPlanError = ref(null)
+const replanForm = ref({
+  plan_start_date: '',
+  plan_end_date: '',
+  hoursByDate: {}, // date -> string (input value)
+})
+
 function defaultPeriod() {
   const now = new Date()
   const start = new Date(now.getFullYear(), now.getMonth() - 1, 1)
@@ -100,7 +114,7 @@ function planHours(task) {
   return hours.toFixed(1)
 }
 
-/** Плановые часы по дню (распределение из API plan_hours_by_date) */
+/** Плановые часы по дню (скорректированный план из API plan_hours_by_date) */
 function planHoursForTaskDay(task, date) {
   const byDate = task.plan_hours_by_date || {}
   const h = byDate[date]
@@ -108,7 +122,15 @@ function planHoursForTaskDay(task, date) {
   return Number(h) === 0 ? '' : String(h)
 }
 
-/** Сумма плановых часов за период по задаче */
+/** Исходные плановые часы по дню (original_plan_hours_by_date, только при переплане) */
+function originalPlanHoursForTaskDay(task, date) {
+  const byDate = task.original_plan_hours_by_date || {}
+  const h = byDate[date]
+  if (h == null || h === 0) return ''
+  return Number(h) === 0 ? '' : String(h)
+}
+
+/** Сумма плановых часов за период по задаче (переплан или авто) */
 function planHoursTotalInPeriod(task) {
   const byDate = task.plan_hours_by_date || {}
   const dayList = days.value || []
@@ -118,6 +140,18 @@ function planHoursTotalInPeriod(task) {
     if (h != null) sum += Number(h)
   }
   return sum > 0 ? sum.toFixed(1) : (planHours(task) !== '—' ? planHours(task) : '—')
+}
+
+/** Сумма исходных плановых часов за период (только при переплане) */
+function originalPlanHoursTotalInPeriod(task) {
+  const byDate = task.original_plan_hours_by_date || {}
+  const dayList = days.value || []
+  let sum = 0
+  for (const d of dayList) {
+    const h = byDate[d]
+    if (h != null) sum += Number(h)
+  }
+  return sum > 0 ? sum.toFixed(1) : '—'
 }
 
 /** Фактические часы всего по задаче (time_spent в минутах) */
@@ -171,13 +205,104 @@ async function loadGrid() {
   }
 }
 
+/** Дни для модалки переплана (период сетки) */
+const replanModalDays = computed(() => {
+  const from = dateFrom.value || gridData.value?.date_from
+  const to = dateTo.value || gridData.value?.date_to
+  if (!from || !to) return []
+  return getDaysBetween(from, to)
+})
+
+function openReplanModal(task) {
+  replanTaskId.value = task.bitrix24_task_id
+  replanTaskTitle.value = (task.title || '').slice(0, 60) + ((task.title || '').length > 60 ? '…' : '')
+  taskPlanData.value = null
+  taskPlanError.value = null
+  replanForm.value = { plan_start_date: '', plan_end_date: '', hoursByDate: {} }
+  showReplanModal.value = true
+  taskPlanLoading.value = true
+  api.taskPlan
+    .get(task.bitrix24_task_id)
+    .then((data) => {
+      taskPlanData.value = data
+      const r = data.replanned || {}
+      replanForm.value.plan_start_date = r.plan_start || ''
+      replanForm.value.plan_end_date = r.plan_end || ''
+      const byDate = r.plan_hours_by_date || {}
+      const next = {}
+      for (const d of replanModalDays.value) {
+        const h = byDate[d]
+        next[d] = h != null && h !== '' ? String(h) : ''
+      }
+      replanForm.value.hoursByDate = next
+    })
+    .catch((e) => {
+      taskPlanError.value = e.message
+    })
+    .finally(() => {
+      taskPlanLoading.value = false
+    })
+}
+
+function closeReplanModal() {
+  showReplanModal.value = false
+  replanTaskId.value = ''
+  taskPlanData.value = null
+  taskPlanError.value = null
+}
+
+function getReplanHoursForDay(date) {
+  return replanForm.value.hoursByDate[date] ?? ''
+}
+
+function setReplanHoursForDay(date, value) {
+  const next = { ...replanForm.value.hoursByDate }
+  next[date] = value
+  replanForm.value = { ...replanForm.value, hoursByDate: next }
+}
+
+function originalHoursLabel(taskPlan) {
+  if (!taskPlan?.original) return '—'
+  const o = taskPlan.original
+  const est = o.time_estimate
+  const h = est >= 10000 ? est / 3600 : est / 60
+  return `${o.plan_start || '—'} … ${o.plan_end || '—'}, ${h.toFixed(1)} ч`
+}
+
+async function saveReplan() {
+  taskPlanSaving.value = true
+  taskPlanError.value = null
+  const planHoursByDate = {}
+  for (const d of replanModalDays.value) {
+    const v = replanForm.value.hoursByDate[d]
+    const num = v === '' ? 0 : parseFloat(String(v).replace(',', '.'))
+    if (!Number.isNaN(num) && num >= 0) {
+      planHoursByDate[d] = num
+    }
+  }
+  try {
+    await api.taskPlan.save({
+      bitrix24_task_id: replanTaskId.value,
+      plan_start_date: replanForm.value.plan_start_date || undefined,
+      plan_end_date: replanForm.value.plan_end_date || undefined,
+      plan_hours_by_date: planHoursByDate,
+    })
+    closeReplanModal()
+    await loadGrid()
+  } catch (e) {
+    taskPlanError.value = e.message
+  } finally {
+    taskPlanSaving.value = false
+  }
+}
+
 onMounted(loadRefs)
 </script>
 
 <template>
   <div class="page">
     <h1 class="page__title">Планирование (сетка)</h1>
-    <p class="page__desc">Сетка по задачам Bitrix24: у каждой задачи две подстроки — <strong>План</strong> (распределённые по дням трудозатраты по датам начала/окончания или постановки/дедлайна) и <strong>Факт</strong> (учёт времени B24 по дням). Колонки — дни. Запустите синхронизацию в настройках интеграции.</p>
+    <p class="page__desc">Сетка по задачам Bitrix24: у каждой задачи подстроки — <strong>План</strong> (светло-голубой), <strong>Факт</strong> (светло-оранжевый). При переплане ПМ добавляется строка <strong>Исх. план</strong> (светло-зелёный). Колонки — дни. Запустите синхронизацию в настройках интеграции.</p>
 
     <p v-if="error" class="error">{{ error }}</p>
 
@@ -228,18 +353,32 @@ onMounted(loadRefs)
           </thead>
           <tbody>
             <template v-for="t in filteredTasks" :key="t.bitrix24_task_id">
-              <!-- Подстрока План -->
-              <tr class="row-plan">
+              <!-- При переплане: подстрока «Исх. план» (светло-зелёный) -->
+              <tr v-if="t.has_plan_override" class="row-original">
                 <td class="td-fixed td-task" :title="t.title">
                   <a v-if="taskLink(t)" :href="taskLink(t)" target="_blank" rel="noopener noreferrer" class="task-link">{{ (t.title || '').slice(0, 40) }}{{ (t.title || '').length > 40 ? '…' : '' }}</a>
                   <span v-else>{{ (t.title || '').slice(0, 40) }}{{ (t.title || '').length > 40 ? '…' : '' }}</span>
-                  <span class="row-type row-type--plan">План</span>
+                  <span class="row-type row-type--original">Исх. план</span>
+                </td>
+                <td class="td-fixed td-spec">{{ specialistNameByB24Id[t.responsible_user_id] || t.responsible_user_id || '—' }}</td>
+                <td class="td-fixed td-hours">{{ originalPlanHoursTotalInPeriod(t) }}</td>
+                <td v-for="day in days" :key="day" class="td-day td-day--original" :class="{ 'td-day--weekend': isWeekend(day) }">{{ originalPlanHoursForTaskDay(t, day) }}</td>
+              </tr>
+              <!-- Подстрока План / Переплан (светло-голубой) -->
+              <tr class="row-plan">
+                <td class="td-fixed td-task" :title="t.title">
+                  <template v-if="!t.has_plan_override">
+                    <a v-if="taskLink(t)" :href="taskLink(t)" target="_blank" rel="noopener noreferrer" class="task-link">{{ (t.title || '').slice(0, 40) }}{{ (t.title || '').length > 40 ? '…' : '' }}</a>
+                    <span v-else>{{ (t.title || '').slice(0, 40) }}{{ (t.title || '').length > 40 ? '…' : '' }}</span>
+                  </template>
+                  <span class="row-type" :class="t.has_plan_override ? 'row-type--replanned' : 'row-type--plan'">{{ t.has_plan_override ? 'Переплан' : 'План' }}</span>
+                  <button type="button" class="btn-replan" @click="openReplanModal(t)">Изменить план</button>
                 </td>
                 <td class="td-fixed td-spec">{{ specialistNameByB24Id[t.responsible_user_id] || t.responsible_user_id || '—' }}</td>
                 <td class="td-fixed td-hours">{{ planHoursTotalInPeriod(t) }}</td>
                 <td v-for="day in days" :key="day" class="td-day td-day--plan" :class="{ 'td-day--weekend': isWeekend(day) }">{{ planHoursForTaskDay(t, day) }}</td>
               </tr>
-              <!-- Подстрока Факт -->
+              <!-- Подстрока Факт (светло-оранжевый) -->
               <tr class="row-fact">
                 <td class="td-fixed td-task td-task-fact">
                   <span class="row-type row-type--fact">Факт</span>
@@ -256,6 +395,55 @@ onMounted(loadRefs)
         {{ gridData.tasks?.length === 0 ? 'Нет задач у выбранных специалистов за период. Запустите синхронизацию с Bitrix24.' : 'Нет задач с плановым временем. Снимите галочку «Скрыть задачи без планового времени», чтобы показать все.' }}
       </p>
     </section>
+
+    <!-- Модалка переплана -->
+    <Teleport to="body">
+      <div v-if="showReplanModal" class="modal-overlay" @click.self="closeReplanModal">
+        <div class="modal-panel">
+          <h3 class="modal-title">Переплан задачи</h3>
+          <p v-if="replanTaskTitle" class="modal-task-title">{{ replanTaskTitle }}</p>
+          <p v-if="taskPlanError" class="error">{{ taskPlanError }}</p>
+          <template v-if="taskPlanLoading">
+            <p class="muted">Загрузка…</p>
+          </template>
+          <template v-else-if="taskPlanData">
+            <section class="replan-section">
+              <h4>Исходный план (только чтение)</h4>
+              <p class="replan-original">{{ originalHoursLabel(taskPlanData) }}</p>
+            </section>
+            <section class="replan-section">
+              <h4>Переплан</h4>
+              <div class="replan-dates">
+                <label>Начало <input v-model="replanForm.plan_start_date" type="date" class="input" /></label>
+                <label>Окончание <input v-model="replanForm.plan_end_date" type="date" class="input" /></label>
+              </div>
+              <p class="muted">Часы по дням (период сетки):</p>
+              <div class="replan-days-grid">
+                <template v-for="day in replanModalDays" :key="day">
+                  <label class="replan-day-cell" :class="{ 'replan-day-cell--weekend': isWeekend(day) }">
+                    <span class="replan-day-label">{{ day.slice(8, 10) }}.{{ day.slice(5, 7) }}</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.5"
+                      class="input input--hours"
+                      :value="getReplanHoursForDay(day)"
+                      @input="setReplanHoursForDay(day, ($event.target).value)"
+                    />
+                  </label>
+                </template>
+              </div>
+            </section>
+          </template>
+          <div class="modal-actions">
+            <button type="button" class="btn" @click="closeReplanModal">Отмена</button>
+            <button type="button" class="btn btn--primary" :disabled="taskPlanLoading || taskPlanSaving" @click="saveReplan">
+              {{ taskPlanSaving ? 'Сохранение…' : 'Сохранить' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -300,16 +488,46 @@ onMounted(loadRefs)
 
 .task-link { color: var(--color-primary); text-decoration: none; }
 .task-link:hover { text-decoration: underline; }
-.grid-table .td-day { color: #475569; background: #fff; }
-.grid-table .th-day--weekend, .grid-table .td-day--weekend { background: #f5f5f5; color: #64748b; }
-.grid-table .td-fixed + .td-day--weekend { box-shadow: -2px 0 0 0 #f5f5f5; }
+.grid-table .td-day { color: #475569; }
+.grid-table .th-day--weekend { background: #f1f5f9; color: #64748b; }
 
-/* Подстроки План / Факт */
-.row-type { font-size: 0.75rem; color: #94a3b8; margin-left: 0.35rem; }
-.row-type--plan { color: #0ea5e9; }
-.row-type--fact { color: #22c55e; }
-.grid-table tr.row-fact .td-fixed { background: #f8fafc; }
-.grid-table tr.row-fact .td-day { background: #f8fafc; }
-.grid-table tr.row-fact .td-day--weekend { background: #f1f5f9; }
+/* Заливка по типу строки: исходный план — зелёный, переплан — голубой, факт — оранжевый */
+.grid-table tr.row-original .td-fixed { background: #dcfce7; }
+.grid-table tr.row-original .td-day { background: #dcfce7; }
+.grid-table tr.row-original .td-day--weekend { background: #bbf7d0; }
+.grid-table tr.row-plan .td-fixed { background: #e0f2fe; }
+.grid-table tr.row-plan .td-day { background: #e0f2fe; }
+.grid-table tr.row-plan .td-day--weekend { background: #bae6fd; }
+.grid-table tr.row-fact .td-fixed { background: #ffedd5; }
+.grid-table tr.row-fact .td-day { background: #ffedd5; }
+.grid-table tr.row-fact .td-day--weekend { background: #fed7aa; }
+.grid-table tr.row-original .td-fixed + .td-day--weekend { box-shadow: -2px 0 0 0 #bbf7d0; }
+.grid-table tr.row-plan .td-fixed + .td-day--weekend { box-shadow: -2px 0 0 0 #bae6fd; }
+.grid-table tr.row-fact .td-fixed + .td-day--weekend { box-shadow: -2px 0 0 0 #fed7aa; }
+
+/* Подписи типа строки */
+.row-type { font-size: 0.75rem; margin-left: 0.35rem; }
+.row-type--original { color: #166534; }
+.row-type--plan, .row-type--replanned { color: #0369a1; }
+.row-type--fact { color: #c2410c; }
 .td-task-fact { padding-left: 1rem; }
+.btn-replan { margin-left: 0.5rem; padding: 0.2rem 0.4rem; font-size: 0.75rem; border: 1px solid #0ea5e9; border-radius: 4px; background: #e0f2fe; color: #0369a1; cursor: pointer; }
+.btn-replan:hover { background: #bae6fd; }
+
+/* Модалка переплана */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 1rem; }
+.modal-panel { background: #fff; border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.15); max-width: 90vw; max-height: 90vh; overflow: auto; padding: 1.25rem; }
+.modal-title { margin: 0 0 0.5rem; font-size: 1.25rem; }
+.modal-task-title { margin: 0 0 1rem; color: #64748b; font-size: 0.9rem; }
+.replan-section { margin-bottom: 1.25rem; }
+.replan-section h4 { margin: 0 0 0.5rem; font-size: 0.95rem; }
+.replan-original { margin: 0; padding: 0.5rem; background: #f1f5f9; border-radius: 4px; font-size: 0.9rem; }
+.replan-dates { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 0.75rem; }
+.replan-dates label { display: flex; align-items: center; gap: 0.35rem; }
+.replan-days-grid { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
+.replan-day-cell { display: flex; flex-direction: column; align-items: center; gap: 0.2rem; padding: 0.35rem; border: 1px solid #e2e8f0; border-radius: 4px; min-width: 3rem; }
+.replan-day-cell--weekend { background: #f8fafc; }
+.replan-day-label { font-size: 0.75rem; color: #64748b; }
+.replan-day-cell .input--hours { width: 2.8rem; text-align: center; padding: 0.25rem; }
+.modal-actions { display: flex; gap: 0.75rem; justify-content: flex-end; margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid #e2e8f0; }
 </style>
