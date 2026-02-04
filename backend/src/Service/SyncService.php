@@ -23,6 +23,9 @@ final class SyncService
     public const MODE_TASKS = 'tasks';
     public const MODE_USERS = 'users';
 
+    /** Системные UF_ поля B24 — не сохраняем в каталог и не пишем значения (вложения, почта, CRM и т.д.). */
+    private const SYSTEM_UF_FIELDS = ['UF_TASK_WEBDAV_FILES', 'UF_MAIL_MESSAGE', 'UF_CRM_TASK'];
+
     private PDO $pdo;
     private IntegrationSettingsRepository $settings;
     private ?string $webhookUrl = null;
@@ -75,6 +78,22 @@ final class SyncService
 
         $client = new Client($url);
         $taskSelect = ['ID', 'TITLE', 'RESPONSIBLE_ID', 'DEADLINE', 'TIME_ESTIMATE', 'TIME_SPENT', 'STATUS', 'GROUP_ID', 'START_DATE_PLAN', 'END_DATE_PLAN', 'CREATED_DATE'];
+        if ($phase === 0 && $tasksOffset === 0) {
+            $ufRaw = $client->getTaskUserFieldListRaw();
+            if (empty($ufRaw['error']) && !empty($ufRaw['items'])) {
+                $this->refreshTaskUfCatalog($ufRaw['items']);
+                $names = [];
+                foreach ($ufRaw['items'] as $item) {
+                    $name = $item['FIELD_NAME'] ?? $item['fieldName'] ?? null;
+                    if ($name !== null && $name !== '' && (str_starts_with((string) $name, 'UF_') || str_starts_with((string) $name, 'uf_'))) {
+                        $names[] = (string) $name;
+                    }
+                }
+                if ($names !== []) {
+                    $taskSelect = array_merge($taskSelect, $names);
+                }
+            }
+        }
         $userSelect = ['ID', 'NAME', 'EMAIL'];
         $tasksCount = 0;
         $usersCount = 0;
@@ -87,7 +106,7 @@ final class SyncService
             }
             $responsibleIds = $this->getSyncResponsibleIds();
             if ($responsibleIds !== []) {
-                $filter['RESPONSIBLE_ID'] = implode(',', $responsibleIds);
+                $filter['RESPONSIBLE_ID'] = $responsibleIds;
             }
             $tasksResult = $client->callOnePage('tasks.task.list', 'tasks', $tasksOffset, self::PAGE_SIZE, $taskSelect, $filter);
             if (!empty($tasksResult['error'])) {
@@ -173,7 +192,8 @@ final class SyncService
         }
 
         if ($phase === 2) {
-            $taskIds = $this->getTaskIdsForElapsedSync($elapsedOffset, self::ELAPSED_TASKS_PER_CHUNK);
+            [$dateFrom, $dateTo] = $this->getSyncDateRange();
+            $taskIds = $this->getTaskIdsForElapsedSync($elapsedOffset, self::ELAPSED_TASKS_PER_CHUNK, $dateFrom, $dateTo);
             $elapsedCount = 0;
             $syncedAt = date('Y-m-d H:i:s');
             foreach ($taskIds as $taskId) {
@@ -348,6 +368,7 @@ final class SyncService
     private function upsertTasks(array $tasks): void
     {
         $syncedAt = date('Y-m-d H:i:s');
+        $allowedUf = $this->getAllowedTaskUfFieldCodes();
         $stmt = $this->pdo->prepare(
             'INSERT INTO bitrix24_tasks_cache (bitrix24_task_id, title, responsible_user_id, deadline, time_estimate, time_spent, status, group_id, start_date_plan, end_date_plan, created_date, synced_at, raw_json)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -387,7 +408,115 @@ final class SyncService
                 $syncedAt,
                 $rawJson,
             ]);
+            $this->upsertTaskCustomFields((string) $id, $t, $syncedAt, $allowedUf);
         }
+    }
+
+    /**
+     * Обновить каталог пользовательских полей (без системных); только поля из каталога пишутся в bitrix24_task_custom_field.
+     * @param list<array> $items элементы из task.item.userfield.getlist
+     */
+    private function refreshTaskUfCatalog(array $items): void
+    {
+        $syncedAt = date('Y-m-d H:i:s');
+        $existingLabels = [];
+        try {
+            $rows = $this->pdo->query('SELECT field_code, label FROM bitrix24_task_uf_catalog')->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($rows as $r) {
+                $l = trim((string) ($r['label'] ?? ''));
+                if ($l !== '') {
+                    $existingLabels[$r['field_code']] = $r['label'];
+                }
+            }
+        } catch (\Throwable $e) {
+            // таблица может отсутствовать до миграции 013
+        }
+        $stmt = $this->pdo->prepare(
+            'INSERT INTO bitrix24_task_uf_catalog (field_code, label, synced_at) VALUES (?, ?, ?)
+             ON DUPLICATE KEY UPDATE label = VALUES(label), synced_at = VALUES(synced_at)'
+        );
+        foreach ($items as $item) {
+            $fieldName = $item['FIELD_NAME'] ?? $item['fieldName'] ?? null;
+            if ($fieldName === null || $fieldName === '') {
+                continue;
+            }
+            $fieldName = (string) $fieldName;
+            if (strtoupper($fieldName) !== $fieldName || strpos($fieldName, 'UF_') !== 0) {
+                continue;
+            }
+            if (in_array($fieldName, self::SYSTEM_UF_FIELDS, true)) {
+                continue;
+            }
+            $code = $this->fieldNameToCamelCase($fieldName);
+            $label = null;
+            if (isset($item['LIST_COLUMN_LABEL']) && is_array($item['LIST_COLUMN_LABEL'])) {
+                $label = $item['LIST_COLUMN_LABEL']['ru'] ?? $item['LIST_COLUMN_LABEL']['en'] ?? reset($item['LIST_COLUMN_LABEL']) ?: null;
+            } elseif (isset($item['LIST_COLUMN_LABEL']) && is_string($item['LIST_COLUMN_LABEL'])) {
+                $label = $item['LIST_COLUMN_LABEL'];
+            }
+            $label = $label !== null ? trim((string) $label) : '';
+            if ($label === '' && isset($existingLabels[$code])) {
+                $label = $existingLabels[$code];
+            }
+            $stmt->execute([$code, $label !== '' ? $label : null, $syncedAt]);
+        }
+    }
+
+    /** Преобразовать FIELD_NAME (UF_XXX_YYY) в camelCase, как в ответе tasks.task.list. */
+    private function fieldNameToCamelCase(string $fieldName): string
+    {
+        $parts = array_map('strtolower', explode('_', $fieldName));
+        if ($parts === []) {
+            return $fieldName;
+        }
+        $parts = array_map('ucfirst', $parts);
+        return lcfirst(implode('', $parts));
+    }
+
+    /**
+     * Сохранить в bitrix24_task_custom_field только пользовательские поля из каталога (без системных).
+     * @param array<string, true> $allowedUf field_code => true
+     */
+    private function upsertTaskCustomFields(string $bitrix24TaskId, array $taskData, string $syncedAt, array $allowedUf): void
+    {
+        if ($allowedUf === []) {
+            return;
+        }
+        $deleteStmt = $this->pdo->prepare('DELETE FROM bitrix24_task_custom_field WHERE bitrix24_task_id = ?');
+        $deleteStmt->execute([$bitrix24TaskId]);
+        $insertStmt = $this->pdo->prepare(
+            'INSERT INTO bitrix24_task_custom_field (bitrix24_task_id, field_code, value_text, synced_at) VALUES (?, ?, ?, ?)'
+        );
+        foreach ($taskData as $key => $value) {
+            $keyStr = (string) $key;
+            if (strlen($keyStr) < 2 || strtoupper(substr($keyStr, 0, 2)) !== 'UF') {
+                continue;
+            }
+            if (!isset($allowedUf[$keyStr])) {
+                continue;
+            }
+            if ($value === null || $value === '') {
+                $valueStr = '';
+            } elseif (is_bool($value)) {
+                $valueStr = $value ? '1' : '0';
+            } elseif (is_array($value)) {
+                $valueStr = json_encode($value);
+            } else {
+                $valueStr = (string) $value;
+            }
+            $insertStmt->execute([$bitrix24TaskId, $keyStr, $valueStr, $syncedAt]);
+        }
+    }
+
+    /** @return array<string, true> field_code => true для полей из каталога */
+    private function getAllowedTaskUfFieldCodes(): array
+    {
+        $rows = $this->pdo->query('SELECT field_code FROM bitrix24_task_uf_catalog')->fetchAll(PDO::FETCH_COLUMN);
+        $out = [];
+        foreach ($rows as $code) {
+            $out[(string) $code] = true;
+        }
+        return $out;
     }
 
     private function upsertUsers(array $users): void
@@ -434,12 +563,26 @@ final class SyncService
         return $ts ? date('Y-m-d', $ts) : null;
     }
 
-    /** @return list<string> bitrix24_task_id */
-    private function getTaskIdsForElapsedSync(int $offset, int $limit): array
+    /**
+     * ID задач для запроса учёта времени — только задачи в выбранном диапазоне (по created_date).
+     * @param string|null $dateTo Y-m-d или null (без верхней границы)
+     * @return list<string> bitrix24_task_id
+     */
+    private function getTaskIdsForElapsedSync(int $offset, int $limit, string $dateFrom, ?string $dateTo): array
     {
-        $stmt = $this->pdo->prepare('SELECT bitrix24_task_id FROM bitrix24_tasks_cache ORDER BY id LIMIT ? OFFSET ?');
-        $stmt->bindValue(1, $limit, PDO::PARAM_INT);
-        $stmt->bindValue(2, $offset, PDO::PARAM_INT);
+        $sql = 'SELECT bitrix24_task_id FROM bitrix24_tasks_cache WHERE created_date >= ?';
+        $params = [$dateFrom . ' 00:00:00'];
+        if ($dateTo !== null && $dateTo !== '') {
+            $sql .= ' AND created_date <= ?';
+            $params[] = $dateTo . ' 23:59:59';
+        }
+        $sql .= ' ORDER BY id LIMIT ? OFFSET ?';
+        $params[] = $limit;
+        $params[] = $offset;
+        $stmt = $this->pdo->prepare($sql);
+        foreach ($params as $i => $v) {
+            $stmt->bindValue($i + 1, $v, is_int($v) ? PDO::PARAM_INT : PDO::PARAM_STR);
+        }
         $stmt->execute();
         return $stmt->fetchAll(PDO::FETCH_COLUMN);
     }

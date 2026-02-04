@@ -133,7 +133,7 @@ final class Client
     /**
      * Один запрос — одна страница (для постраничной синхронизации).
      *
-     * @param array<string, string> $filter фильтр Bitrix24, например ['>=CREATED_DATE' => '2024-01-01']
+     * @param array<string, string|array<int, string>> $filter фильтр Bitrix24; для нескольких значений — массив, например ['RESPONSIBLE_ID' => ['1','2']]
      */
     public function callOnePage(string $method, string $resultKey, int $start, int $pageSize = 50, array $select = [], array $filter = []): array
     {
@@ -142,7 +142,13 @@ final class Client
             $params['select'] = $select;
         }
         foreach ($filter as $k => $v) {
-            $params['filter[' . $k . ']'] = $v;
+            if (is_array($v)) {
+                foreach ($v as $idx => $item) {
+                    $params['filter[' . $k . '][' . $idx . ']'] = $item;
+                }
+            } else {
+                $params['filter[' . $k . ']'] = $v;
+            }
         }
         $response = $this->call($method, $params);
         if (!empty($response['error'])) {
@@ -194,5 +200,47 @@ final class Client
             $list = isset($result['result']) ? $result['result'] : (array_is_list($result) ? $result : []);
         }
         return ['data' => is_array($list) ? $list : []];
+    }
+
+    /**
+     * Список пользовательских полей задач (UF_*) для передачи в select tasks.task.list.
+     * Метод: task.item.userfield.getlist.
+     *
+     * @return array{list: list<string>, error?: string, error_description?: string}
+     */
+    public function getTaskUserFieldList(): array
+    {
+        $raw = $this->getTaskUserFieldListRaw();
+        if (isset($raw['error'])) {
+            return ['list' => [], 'error' => $raw['error'], 'error_description' => $raw['error_description'] ?? ''];
+        }
+        $names = [];
+        foreach ($raw['items'] as $item) {
+            $name = $item['FIELD_NAME'] ?? $item['fieldName'] ?? null;
+            if ($name !== null && $name !== '' && (str_starts_with((string) $name, 'UF_') || str_starts_with((string) $name, 'uf_'))) {
+                $names[] = (string) $name;
+            }
+        }
+        return ['list' => $names];
+    }
+
+    /**
+     * Сырой ответ task.item.userfield.getlist — массив элементов с FIELD_NAME, LIST_COLUMN_LABEL и т.д.
+     * Для построения каталога пользовательских полей (исключая системные).
+     *
+     * @return array{items: list<array>, error?: string, error_description?: string}
+     */
+    public function getTaskUserFieldListRaw(): array
+    {
+        $response = $this->call('task.item.userfield.getlist', []);
+        if (!empty($response['error'])) {
+            return ['items' => [], 'error' => $response['error'], 'error_description' => $response['error_description'] ?? ''];
+        }
+        $result = $response['result'] ?? null;
+        if (!is_array($result)) {
+            return ['items' => []];
+        }
+        $list = isset($result['result']) ? $result['result'] : (array_is_list($result) ? $result : []);
+        return ['items' => is_array($list) ? $list : []];
     }
 }

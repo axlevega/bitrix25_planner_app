@@ -14,6 +14,12 @@ const loading = ref(false)
 const error = ref(null)
 /** Скрыть задачи без планового времени (time_estimate); по умолчанию включено */
 const hideTasksWithoutPlan = ref(true)
+/** Фильтр по пользовательскому полю: field_code из каталога */
+const filterUfFieldCode = ref('')
+/** Значение поля для фильтра (например "1" — да, "0" — нет) */
+const filterUfValue = ref('')
+/** Каталог UF-полей (подписи и список для фильтра) */
+const taskUfCatalog = ref([])
 
 /** Модалка переплана */
 const showReplanModal = ref(false)
@@ -164,9 +170,14 @@ function factHoursTotal(task) {
 
 async function loadRefs() {
   try {
-    const [specRes, depRes] = await Promise.all([api.specialists.list(), api.departments.list()])
+    const [specRes, depRes, catalogRes] = await Promise.all([
+      api.specialists.list(),
+      api.departments.list(),
+      api.taskUfCatalog.list().catch(() => ({ items: [] })),
+    ])
     specialists.value = specRes.items || []
     departments.value = depRes.items || []
+    taskUfCatalog.value = catalogRes.items || []
     if (!dateFrom.value || !dateTo.value) defaultPeriod()
   } catch (e) {
     error.value = e.message
@@ -197,7 +208,12 @@ async function loadGrid() {
     } else {
       params.department_id = id
     }
+    if (filterUfFieldCode.value && filterUfValue.value !== '') {
+      params.filter_uf_field_code = filterUfFieldCode.value
+      params.filter_uf_value = filterUfValue.value
+    }
     gridData.value = await api.planningGrid(params)
+    if (gridData.value?.task_uf_catalog?.length) taskUfCatalog.value = gridData.value.task_uf_catalog
   } catch (e) {
     error.value = e.message
   } finally {
@@ -333,6 +349,25 @@ onMounted(loadRefs)
         <input v-model="hideTasksWithoutPlan" type="checkbox" />
         Скрыть задачи без планового времени
       </label>
+      <template v-if="taskUfCatalog.length">
+        <label>
+          <span>Фильтр по полю</span>
+          <select v-model="filterUfFieldCode" class="input">
+            <option value="">— не фильтровать —</option>
+            <option v-for="f in taskUfCatalog" :key="f.field_code" :value="f.field_code">
+              {{ f.label || f.field_code }}
+            </option>
+          </select>
+        </label>
+        <label v-if="filterUfFieldCode">
+          <span>Значение</span>
+          <select v-model="filterUfValue" class="input">
+            <option value="">— любое —</option>
+            <option value="1">да (1)</option>
+            <option value="0">нет (0)</option>
+          </select>
+        </label>
+      </template>
       <button type="button" class="btn btn--primary" :disabled="loading" @click="loadGrid">
         {{ loading ? 'Загрузка…' : 'Показать сетку' }}
       </button>
