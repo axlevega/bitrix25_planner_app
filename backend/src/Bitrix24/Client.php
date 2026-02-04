@@ -133,7 +133,7 @@ final class Client
     /**
      * Один запрос — одна страница (для постраничной синхронизации).
      *
-     * @param array<string, string> $filter фильтр Bitrix24, например ['>=CREATED_DATE' => '2024-01-01']
+     * @param array<string, string|array<int, string>> $filter фильтр Bitrix24; для нескольких значений — массив, например ['RESPONSIBLE_ID' => ['1','2']]
      */
     public function callOnePage(string $method, string $resultKey, int $start, int $pageSize = 50, array $select = [], array $filter = []): array
     {
@@ -142,7 +142,13 @@ final class Client
             $params['select'] = $select;
         }
         foreach ($filter as $k => $v) {
-            $params['filter[' . $k . ']'] = $v;
+            if (is_array($v)) {
+                foreach ($v as $idx => $item) {
+                    $params['filter[' . $k . '][' . $idx . ']'] = $item;
+                }
+            } else {
+                $params['filter[' . $k . ']'] = $v;
+            }
         }
         $response = $this->call($method, $params);
         if (!empty($response['error'])) {

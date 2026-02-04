@@ -87,7 +87,7 @@ final class SyncService
             }
             $responsibleIds = $this->getSyncResponsibleIds();
             if ($responsibleIds !== []) {
-                $filter['RESPONSIBLE_ID'] = implode(',', $responsibleIds);
+                $filter['RESPONSIBLE_ID'] = $responsibleIds;
             }
             $tasksResult = $client->callOnePage('tasks.task.list', 'tasks', $tasksOffset, self::PAGE_SIZE, $taskSelect, $filter);
             if (!empty($tasksResult['error'])) {
