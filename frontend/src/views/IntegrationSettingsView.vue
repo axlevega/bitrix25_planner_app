@@ -12,9 +12,11 @@ const settings = ref({
   sync_date_to: null,
   sync_specialist_ids: [],
   planning_default_department_id: null,
+  planning_default_group_ids: [],
 })
 const specialists = ref([])
 const departments = ref([])
+const taskGroups = ref([])
 const taskUfCatalog = ref([])
 const loading = ref(true)
 const error = ref(null)
@@ -27,13 +29,15 @@ async function load() {
   loading.value = true
   error.value = null
   try {
-    const [res, specRes, depRes, catalogRes] = await Promise.all([
+    const [res, specRes, depRes, catalogRes, groupsRes] = await Promise.all([
       api.integrationSettings.get(),
       api.specialists.list(),
       api.departments.list(),
       api.taskUfCatalog.list().catch(() => ({ items: [] })),
+      api.taskGroups.list().catch(() => ({ items: [] })),
     ])
     taskUfCatalog.value = (catalogRes.items || []).map((it) => ({ ...it, label_edit: it.label ?? '' }))
+    taskGroups.value = groupsRes.items ?? []
     settings.value = {
       portal_url: res.portal_url || '',
       webhook_token: res.webhook_token ?? '',
@@ -44,6 +48,7 @@ async function load() {
       sync_date_to: res.sync_date_to ?? null,
       sync_specialist_ids: Array.isArray(res.sync_specialist_ids) ? res.sync_specialist_ids : [],
       planning_default_department_id: res.planning_default_department_id ?? null,
+      planning_default_group_ids: Array.isArray(res.planning_default_group_ids) ? res.planning_default_group_ids : [],
     }
     specialists.value = specRes.items ?? []
     departments.value = depRes.items ?? []
@@ -80,6 +85,7 @@ async function save() {
       sync_date_to: settings.value.sync_date_range_type === 'custom' ? settings.value.sync_date_to : null,
       sync_specialist_ids: settings.value.sync_specialist_ids,
       planning_default_department_id: settings.value.planning_default_department_id ?? null,
+      planning_default_group_ids: settings.value.planning_default_group_ids ?? [],
     })
     await load()
   } catch (e) {
@@ -242,6 +248,18 @@ onMounted(load)
               <select v-model="settings.planning_default_department_id" class="input">
                 <option :value="null">— не задан —</option>
                 <option v-for="d in departments" :key="d.id" :value="d.id">{{ d.name }}</option>
+              </select>
+            </label>
+          </div>
+
+          <div v-if="taskGroups.length" class="form__block">
+            <span class="form__block-title">Группы по умолчанию для плана</span>
+            <small>В сетке планирования по умолчанию показываются только задачи из выбранных групп (проектов). Пусто — все группы.</small>
+            <label class="form__multi-select">
+              <select v-model="settings.planning_default_group_ids" class="input" multiple size="4">
+                <option v-for="g in taskGroups" :key="g.bitrix24_group_id" :value="g.bitrix24_group_id">
+                  {{ g.name || g.bitrix24_group_id }}
+                </option>
               </select>
             </label>
           </div>
@@ -425,6 +443,15 @@ onMounted(load)
 }
 .form__custom-dates label {
   flex: 1;
+}
+.form__multi-select {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-width: 320px;
+}
+.form__multi-select .input {
+  min-height: 6rem;
 }
 .form__checkbox {
   display: flex;

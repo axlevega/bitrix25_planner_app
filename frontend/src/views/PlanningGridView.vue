@@ -20,6 +20,10 @@ const filterUfFieldCode = ref('')
 const filterUfValue = ref('')
 /** Каталог UF-полей (подписи и список для фильтра) */
 const taskUfCatalog = ref([])
+/** Группы задач B24 (проекты) для фильтра */
+const taskGroups = ref([])
+/** Выбранные группы для фильтра (по умолчанию все); пустой массив = все группы */
+const selectedGroupIds = ref([])
 /** Ref контейнера скролла таблицы (для автоскролла до первого заполненного дня) */
 const tableScrollWrapRef = ref(null)
 /** Ref блока над таблицей (заголовок страницы + фильтры + заголовок секции) для расчёта высоты таблицы */
@@ -211,15 +215,23 @@ function factHoursTotal(task) {
 
 async function loadRefs() {
   try {
-    const [specRes, depRes, catalogRes, settingsRes] = await Promise.all([
+    const [specRes, depRes, catalogRes, groupsRes, settingsRes] = await Promise.all([
       api.specialists.list(),
       api.departments.list(),
       api.taskUfCatalog.list().catch(() => ({ items: [] })),
+      api.taskGroups.list().catch(() => ({ items: [] })),
       api.integrationSettings.get().catch(() => ({})),
     ])
     specialists.value = specRes.items || []
     departments.value = depRes.items || []
     taskUfCatalog.value = catalogRes.items || []
+    taskGroups.value = groupsRes.items || []
+    const defaultGroupIds = settingsRes.planning_default_group_ids
+    if (Array.isArray(defaultGroupIds) && defaultGroupIds.length > 0) {
+      selectedGroupIds.value = defaultGroupIds.map(String)
+    } else if (selectedGroupIds.value.length === 0 && taskGroups.value.length > 0) {
+      selectedGroupIds.value = taskGroups.value.map((g) => g.bitrix24_group_id)
+    }
     if (!dateFrom.value || !dateTo.value) defaultPeriod()
 
     const defaultDepId = settingsRes.planning_default_department_id
@@ -260,6 +272,11 @@ async function loadGrid() {
     if (filterUfFieldCode.value && filterUfValue.value !== '') {
       params.filter_uf_field_code = filterUfFieldCode.value
       params.filter_uf_value = filterUfValue.value
+    }
+    const totalGroups = taskGroups.value.length
+    const selected = selectedGroupIds.value || []
+    if (totalGroups > 0 && selected.length > 0 && selected.length < totalGroups) {
+      params.group_ids = selected.join(',')
     }
     gridData.value = await api.planningGrid(params)
     if (gridData.value?.task_uf_catalog?.length) taskUfCatalog.value = gridData.value.task_uf_catalog
@@ -437,6 +454,16 @@ onUnmounted(() => {
       </label>
       <label>С <input v-model="dateFrom" type="date" class="input" /></label>
       <label>По <input v-model="dateTo" type="date" class="input" /></label>
+      <template v-if="taskGroups.length">
+        <label class="filter-multi">
+          <span>Группы (проекты):</span>
+          <select v-model="selectedGroupIds" class="input" multiple size="3">
+            <option v-for="g in taskGroups" :key="g.bitrix24_group_id" :value="g.bitrix24_group_id">
+              {{ g.name || g.bitrix24_group_id }}
+            </option>
+          </select>
+        </label>
+      </template>
       <label class="filter-checkbox">
         <input v-model="hideTasksWithoutPlan" type="checkbox" />
         Скрыть задачи без планового времени

@@ -218,7 +218,7 @@ final class Application
         $this->router->get('/integration-settings', function (): array {
             $pdo = Database::getConnection();
             $repo = new IntegrationSettingsRepository($pdo);
-            $keys = ['portal_url', 'sync_interval_minutes', 'last_sync_at', 'sync_date_range_type', 'sync_date_from', 'sync_date_to', 'sync_specialist_ids', 'planning_default_department_id'];
+            $keys = ['portal_url', 'sync_interval_minutes', 'last_sync_at', 'sync_date_range_type', 'sync_date_from', 'sync_date_to', 'sync_specialist_ids', 'planning_default_department_id', 'planning_default_group_ids'];
             $v = $repo->getValues($keys);
             $out = [
                 'portal_url' => $v['portal_url'] ?? '',
@@ -230,6 +230,7 @@ final class Application
                 'sync_date_to' => ($v['sync_date_to'] ?? '') !== '' ? $v['sync_date_to'] : null,
                 'sync_specialist_ids' => [],
                 'planning_default_department_id' => null,
+                'planning_default_group_ids' => [],
             ];
             if (isset($v['sync_specialist_ids']) && $v['sync_specialist_ids'] !== '') {
                 $decoded = json_decode($v['sync_specialist_ids'], true);
@@ -238,12 +239,16 @@ final class Application
             if (isset($v['planning_default_department_id']) && $v['planning_default_department_id'] !== '') {
                 $out['planning_default_department_id'] = (int) $v['planning_default_department_id'];
             }
+            if (isset($v['planning_default_group_ids']) && $v['planning_default_group_ids'] !== '') {
+                $decoded = json_decode($v['planning_default_group_ids'], true);
+                $out['planning_default_group_ids'] = is_array($decoded) ? array_values(array_map('strval', $decoded)) : [];
+            }
             return $out;
         });
         $this->router->post('/integration-settings', function (array $payload): array {
             $pdo = Database::getConnection();
             $repo = new IntegrationSettingsRepository($pdo);
-            $allowed = ['portal_url', 'webhook_token', 'sync_interval_minutes', 'sync_date_range_type', 'sync_date_from', 'sync_date_to', 'sync_specialist_ids', 'planning_default_department_id'];
+            $allowed = ['portal_url', 'webhook_token', 'sync_interval_minutes', 'sync_date_range_type', 'sync_date_from', 'sync_date_to', 'sync_specialist_ids', 'planning_default_department_id', 'planning_default_group_ids'];
             foreach ($allowed as $key) {
                 if (!array_key_exists($key, $payload)) {
                     continue;
@@ -251,6 +256,9 @@ final class Application
                 if ($key === 'planning_default_department_id') {
                     $val = $payload[$key];
                     $repo->setValue($key, ($val !== null && $val !== '') ? (string) (int) $val : '');
+                } elseif ($key === 'planning_default_group_ids') {
+                    $val = $payload[$key];
+                    $repo->setValue($key, is_array($val) ? json_encode(array_values(array_map('strval', $val))) : '[]');
                 } elseif ($key === 'sync_specialist_ids') {
                     $val = $payload[$key];
                     $repo->setValue($key, is_array($val) ? json_encode(array_values(array_map('intval', $val))) : '[]');
@@ -266,9 +274,11 @@ final class Application
                     $repo->setValue($key, trim((string) $payload[$key]));
                 }
             }
-            $v = $repo->getValues(['portal_url', 'sync_interval_minutes', 'sync_date_range_type', 'sync_date_from', 'sync_date_to', 'sync_specialist_ids', 'planning_default_department_id']);
+            $v = $repo->getValues(['portal_url', 'sync_interval_minutes', 'sync_date_range_type', 'sync_date_from', 'sync_date_to', 'sync_specialist_ids', 'planning_default_department_id', 'planning_default_group_ids']);
             $ids = isset($v['sync_specialist_ids']) && $v['sync_specialist_ids'] !== '' ? (json_decode($v['sync_specialist_ids'], true) ?: []) : [];
             $defaultDepId = isset($v['planning_default_department_id']) && $v['planning_default_department_id'] !== '' ? (int) $v['planning_default_department_id'] : null;
+            $defaultGroupIds = isset($v['planning_default_group_ids']) && $v['planning_default_group_ids'] !== '' ? (json_decode($v['planning_default_group_ids'], true) ?: []) : [];
+            $defaultGroupIds = is_array($defaultGroupIds) ? array_values(array_map('strval', $defaultGroupIds)) : [];
             return [
                 'portal_url' => $v['portal_url'] ?? '',
                 'sync_interval_minutes' => (int) ($v['sync_interval_minutes'] ?? 30),
@@ -277,6 +287,7 @@ final class Application
                 'sync_date_to' => ($v['sync_date_to'] ?? '') !== '' ? $v['sync_date_to'] : null,
                 'sync_specialist_ids' => $ids,
                 'planning_default_department_id' => $defaultDepId,
+                'planning_default_group_ids' => $defaultGroupIds,
             ];
         });
 
@@ -535,6 +546,27 @@ final class Application
             $stmt->execute($taskIdsInPeriod);
             $tasks = $stmt->fetchAll(\PDO::FETCH_ASSOC);
 
+            // Фильтр по группам (group_ids — через запятую в запросе; пусто = из настройки planning_default_group_ids или все группы)
+            $groupIdsRaw = trim((string) ($payload['group_ids'] ?? ''));
+            $groupIds = $groupIdsRaw !== '' ? array_values(array_unique(array_filter(explode(',', str_replace(' ', '', $groupIdsRaw))))) : [];
+            if ($groupIds === []) {
+                $defaultGroupsRaw = $repo->getValue('planning_default_group_ids');
+                if ($defaultGroupsRaw !== null && $defaultGroupsRaw !== '') {
+                    $decoded = json_decode($defaultGroupsRaw, true);
+                    $groupIds = is_array($decoded) ? array_values(array_filter(array_map('strval', $decoded))) : [];
+                }
+            }
+            if ($groupIds !== []) {
+                $tasks = array_values(array_filter($tasks, function ($t) use ($groupIds) {
+                    $gid = $t['group_id'] ?? '';
+                    return $gid !== '' && $gid !== null && in_array((string) $gid, $groupIds, true);
+                }));
+                $taskIdsFiltered = array_column($tasks, 'bitrix24_task_id');
+                $elapsed = array_values(array_filter($elapsed, function ($e) use ($taskIdsFiltered) {
+                    return in_array($e['task_id'], $taskIdsFiltered, true);
+                }));
+            }
+
             // Сумма фактических трудозатрат из учёта по дням (если в кэше time_spent пусто)
             $totalElapsedByTask = [];
             if ($tasks !== []) {
@@ -601,6 +633,17 @@ final class Application
             }
             unset($task);
             return ['tasks' => $tasks, 'elapsed' => $elapsed, 'specialists' => $specialists, 'date_from' => $dateFrom, 'date_to' => $dateTo, 'portal_url' => $portalUrl, 'task_uf_catalog' => self::getTaskUfCatalog($pdo)];
+        });
+
+        // Список групп задач Bitrix24 (проекты) для фильтра в сетке планирования
+        $this->router->get('/task-groups', function (array $payload): array {
+            $pdo = Database::getConnection();
+            $stmt = $pdo->query('SELECT bitrix24_group_id, name FROM bitrix24_task_groups ORDER BY name, bitrix24_group_id');
+            $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+            $items = array_map(function ($r) {
+                return ['bitrix24_group_id' => $r['bitrix24_group_id'], 'name' => $r['name'] ?? $r['bitrix24_group_id']];
+            }, $rows);
+            return ['items' => $items];
         });
 
         // Каталог пользовательских полей задач (для фильтра по полям и подписей)
