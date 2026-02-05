@@ -61,13 +61,6 @@ export const api = {
     save: (data) => api.post('/integration-settings', data),
   },
   sync: (mode = 'full') => api.post('/sync', { mode }),
-  // Плановые записи и загрузка (фаза 2)
-  planEntries: {
-    list: (params) => api.get('/plan-entries', params),
-    create: (data) => api.post('/plan-entries', data),
-    update: (data) => api.put('/plan-entries', data),
-    delete: (id) => api.delete('/plan-entries', { id }),
-  },
   load: (params) => api.get('/load', params),
   // Сетка планирования: задачи + учёт времени по дням из B24
   planningGrid: (params) => api.get('/planning-grid', params),
@@ -84,14 +77,6 @@ export const api = {
   taskPlan: {
     get: (bitrix24TaskId) => api.get('/task-plan', { bitrix24_task_id: bitrix24TaskId }),
     save: (data) => api.put('/task-plan', data),
-  },
-  // Справочник «проект B24 → тип работы» (регулярка/флайт)
-  projectWorkTypes: {
-    list: () => api.get('/project-work-types'),
-    get: (id) => api.get('/project-work-types', { id }),
-    create: (data) => api.post('/project-work-types', data),
-    update: (data) => api.put('/project-work-types', data),
-    delete: (id) => api.delete('/project-work-types', { id }),
   },
 }
 

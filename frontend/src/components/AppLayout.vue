@@ -9,8 +9,6 @@ import { RouterLink } from 'vue-router'
       <RouterLink to="/departments" class="nav__link">Отделы</RouterLink>
       <RouterLink to="/specialists" class="nav__link">Специалисты</RouterLink>
       <RouterLink to="/integration-settings" class="nav__link">Настройки интеграции</RouterLink>
-      <RouterLink to="/project-work-types" class="nav__link">Типы проектов B24</RouterLink>
-      <RouterLink to="/plan-entries" class="nav__link">Плановые записи</RouterLink>
       <RouterLink to="/planning-grid" class="nav__link">Планирование</RouterLink>
       <RouterLink to="/dashboard" class="nav__link">Загрузка</RouterLink>
     </nav>
