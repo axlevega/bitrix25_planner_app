@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, computed, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
 import { api } from '../api/client'
 
 const specialists = ref([])
@@ -22,6 +22,10 @@ const filterUfValue = ref('')
 const taskUfCatalog = ref([])
 /** Ref контейнера скролла таблицы (для автоскролла до первого заполненного дня) */
 const tableScrollWrapRef = ref(null)
+/** Ref блока над таблицей (заголовок страницы + фильтры + заголовок секции) для расчёта высоты таблицы */
+const aboveTableRef = ref(null)
+/** Высота области таблицы: 100vh минус блок над таблицей (в px) */
+const tableHeightPx = ref(400)
 
 /** Модалка переплана */
 const showReplanModal = ref(false)
@@ -113,6 +117,9 @@ const firstFilledDate = computed(() => {
   const list = days.value || []
   return list.find((d) => hasFilledValueForDay(d)) ?? null
 })
+
+/** Стиль контейнера таблицы: фиксированная высота под viewport минус шапка */
+const tableScrollWrapStyle = computed(() => ({ height: `${tableHeightPx.value}px` }))
 
 function hoursForTaskDay(taskId, date) {
   const key = `${taskId}_${date}`
@@ -374,17 +381,40 @@ async function saveReplan() {
   }
 }
 
-onMounted(loadRefs)
+function updateTableHeight() {
+  if (!aboveTableRef.value) return
+  const rect = aboveTableRef.value.getBoundingClientRect()
+  const margin = 24
+  tableHeightPx.value = Math.max(200, window.innerHeight - rect.bottom - margin)
+}
+
+let resizeObserver = null
+onMounted(() => {
+  loadRefs()
+  nextTick(() => {
+    updateTableHeight()
+    resizeObserver = new ResizeObserver(updateTableHeight)
+    if (aboveTableRef.value) resizeObserver.observe(aboveTableRef.value)
+  })
+  window.addEventListener('resize', updateTableHeight)
+})
+watch(() => gridData.value, () => nextTick(updateTableHeight), { flush: 'post' })
+onUnmounted(() => {
+  window.removeEventListener('resize', updateTableHeight)
+  if (resizeObserver && aboveTableRef.value) resizeObserver.unobserve(aboveTableRef.value)
+  resizeObserver = null
+})
 </script>
 
 <template>
   <div class="page">
-    <h1 class="page__title">Планирование (сетка)</h1>
-    <p class="page__desc">Сетка по задачам Bitrix24: у каждой задачи подстроки — <strong>План</strong> (светло-голубой), <strong>Факт</strong> (светло-оранжевый). При переплане ПМ добавляется строка <strong>Исх. план</strong> (светло-зелёный). Колонки — дни. Запустите синхронизацию в настройках интеграции.</p>
+    <div ref="aboveTableRef" class="planning-above-table">
+      <h1 class="page__title">Планирование (сетка)</h1>
+      <p class="page__desc">Сетка по задачам Bitrix24: у каждой задачи подстроки — <strong>План</strong> (светло-голубой), <strong>Факт</strong> (светло-оранжевый). При переплане ПМ добавляется строка <strong>Исх. план</strong> (светло-зелёный). Колонки — дни. Запустите синхронизацию в настройках интеграции.</p>
 
-    <p v-if="error" class="error">{{ error }}</p>
+      <p v-if="error" class="error">{{ error }}</p>
 
-    <section class="filter-section">
+      <section class="filter-section">
       <label>
         <input v-model="scopeType" type="radio" value="specialist" /> Специалисты
       </label>
@@ -435,10 +465,14 @@ onMounted(loadRefs)
       </button>
     </section>
 
+      <template v-if="gridData && !gridData.error">
+        <h2 class="grid-section__title">Задачи и учёт времени по дням</h2>
+        <p class="muted grid-section__period">Период: {{ gridData.date_from }} — {{ gridData.date_to }}</p>
+      </template>
+    </div>
+
     <section v-if="gridData && !gridData.error" class="grid-section">
-      <h2>Задачи и учёт времени по дням</h2>
-      <p class="muted">Период: {{ gridData.date_from }} — {{ gridData.date_to }}</p>
-      <div ref="tableScrollWrapRef" class="table-scroll-wrap">
+      <div ref="tableScrollWrapRef" class="table-scroll-wrap" :style="tableScrollWrapStyle">
         <table class="grid-table">
           <thead>
             <tr>
@@ -555,11 +589,15 @@ onMounted(loadRefs)
 .btn { padding: 0.4rem 0.75rem; border: 1px solid #cbd5e1; border-radius: 4px; background: #fff; cursor: pointer; font-size: 0.9rem; }
 .btn--primary { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
 .btn:disabled { opacity: 0.7; cursor: not-allowed; }
-.grid-section { margin-top: 1rem; }
-.grid-section h2 { margin: 0 0 0.5rem; font-size: 1.1rem; }
+.planning-above-table { margin-bottom: 0; }
+.planning-above-table .grid-section__title { margin: 1rem 0 0.25rem; font-size: 1.1rem; }
+.planning-above-table .grid-section__period { margin: 0 0 0.5rem; }
+
+.grid-section { margin-top: 0; }
+.grid-section .table-scroll-wrap { margin-top: 0; }
 
 .table-scroll-wrap {
-  overflow-x: auto;
+  overflow: auto;
   max-width: 100%;
   border: 1px solid #e2e8f0;
   border-radius: 6px;
@@ -567,6 +605,9 @@ onMounted(loadRefs)
 .grid-table { border-collapse: collapse; font-size: 0.75rem; min-width: 100%; background: #fff; }
 .grid-table th, .grid-table td { padding: 0.05rem 0.2rem; border: 1px solid #e2e8f0; text-align: left; white-space: nowrap; background: #fff; }
 .grid-table th { background: #f8fafc; font-weight: 600; }
+/* Фиксированная шапка таблицы при вертикальной прокрутке */
+.grid-table thead th { position: sticky; top: 0; z-index: 3; background: #f8fafc; box-shadow: 0 1px 0 0 #e2e8f0; }
+.grid-table thead th.th-fixed { z-index: 4; }
 .grid-table .th-day, .grid-table .td-day { text-align: center; min-width: 2.5rem; }
 
 /* Фиксированные колонки (не скроллятся по горизонтали) */
@@ -581,7 +622,7 @@ onMounted(loadRefs)
 .td-task, .td-spec {font-size: 0.9rem;}
 .th-spec, .td-spec { left: 200px; min-width: 120px; max-width: 120px; }
 .th-hours, .td-hours { left: 320px; min-width: 56px; max-width: 56px; }
-.grid-table .row-plan .td-hours { min-width: 8rem; max-width: none; white-space: normal; }
+.grid-table .row-plan .td-hours { min-width: 8rem; max-width: none; white-space: normal; display: flex; align-items: center; justify-content: space-between;}
 
 .task-link { color: var(--color-primary); text-decoration: none; }
 .task-link:hover { text-decoration: underline; }
@@ -596,6 +637,8 @@ onMounted(loadRefs)
 .grid-table .row-plan .td-day--plan.td-day--filled.td-day--weekend { background: #bae6fd !important; }
 .grid-table .row-fact .td-day--fact.td-day--filled { background: #ffedd5; }
 .grid-table .row-fact .td-day--fact.td-day--filled.td-day--weekend { background: #fed7aa !important; }
+
+.grid-table .row-plan .td-fixed, .grid-table .row-fact .td-fixed, .grid-table .row-original .td-fixed {background-color: #f5f5f5;}
 
 /* Подписи типа строки */
 .row-type { font-size: 0.75rem; margin-left: 0.35rem; }
