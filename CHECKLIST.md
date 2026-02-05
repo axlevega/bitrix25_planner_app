@@ -43,6 +43,7 @@
 - [x] **specialists** — id, bitrix24_user_id, department_id, name (или из B24), norm_hours_per_day, norm_hours_per_week, flight_hours_limit_per_day (или per_week), is_active, created_at, updated_at
 - [x] **work_types** — id, code (regular/flight), name — справочник типов работ (регулярка / флайт)
 - [x] **bitrix24_tasks_cache** — id, bitrix24_task_id, title, responsible_user_id, deadline, time_estimate, time_spent, status, group_id (проект задачи), synced_at, raw_json (опционально)
+- [x] **bitrix24_task_status** — справочник статусов задач B24 (bitrix24_status_id, name) для отображения названий в публичной части
 - [x] **bitrix24_users_cache** — id, bitrix24_user_id, name, email, synced_at — для маппинга и отображения
 - [x] **integration_settings** — id, portal_url, webhook_token (или отдельная таблица credentials), sync_interval_minutes, last_sync_at, created_at, updated_at
 - [x] **sync_log** — id, started_at, finished_at, status (success/error), message, tasks_count (опционально)
@@ -51,7 +52,8 @@
 - [x] Реализовать клиент запросов к Bitrix24 REST API по URL вебхука (все запросы только к задачам и связанным данным)
 - [x] Получение списка задач: tasks.task.list (ответственный, сроки, оценка/факт времени, статус, проект задачи)
 - [x] Получение списка пользователей: user.get (для маппинга специалистов и отделов)
-- [ ] При необходимости: проекты задач (tasks), время по задачам (если есть в API)
+- [x] Группы задач (проекты B24): sonet.group.get → таблица bitrix24_task_groups, отдельная синхронизация (mode=groups) и в общей (фаза 0)
+- [ ] При необходимости: время по задачам — уже реализовано (task.elapseditem.getlist)
 - [x] Обработка пагинации (по 50 и т.д.), учёт лимитов API Bitrix24
 - [x] Повторные попытки при ошибках, логирование в sync_log
 
