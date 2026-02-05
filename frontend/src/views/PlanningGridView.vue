@@ -139,7 +139,7 @@ function isWeekend(dateStr) {
   return day === 0 || day === 6
 }
 
-/** Общее плановое время задачи: в БД минуты → часы = / 60 */
+/** Общее плановое время задачи. В БД time_estimate хранится в минутах → часы = / 60. Формат: целое (36, 102) или один знак (0.5). */
 function planHours(task) {
   if (task.time_estimate == null) return '—'
   const v = Number(task.time_estimate)
