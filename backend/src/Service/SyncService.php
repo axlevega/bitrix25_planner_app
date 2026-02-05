@@ -385,10 +385,10 @@ final class SyncService
             $title = $t['title'] ?? $t['TITLE'] ?? null;
             $responsible = $t['responsibleId'] ?? $t['RESPONSIBLE_ID'] ?? null;
             $deadline = $this->parseDate($t['deadline'] ?? $t['DEADLINE'] ?? null);
-            // В БД храним минуты; данные из B24 приходят в минутах
+            // В БД храним минуты; в Bitrix24 REST API TIME_ESTIMATE приходит в секундах — конвертируем
             $timeEst = $t['timeEstimate'] ?? $t['TIME_ESTIMATE'] ?? null;
             if ($timeEst !== null) {
-                $timeEst = (int) $timeEst;
+                $timeEst = (int) round((int) $timeEst / 60);
             }
             // B24: TIME_SPENT не всегда в ответе; DURATION_FACT — минуты, TIME_SPENT_IN_LOGS — секунды
             $timeSpent = $t['timeSpent'] ?? $t['TIME_SPENT'] ?? $t['durationFact'] ?? $t['DURATION_FACT'] ?? null;

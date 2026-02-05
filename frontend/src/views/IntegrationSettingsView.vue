@@ -11,8 +11,10 @@ const settings = ref({
   sync_date_from: null,
   sync_date_to: null,
   sync_specialist_ids: [],
+  planning_default_department_id: null,
 })
 const specialists = ref([])
+const departments = ref([])
 const taskUfCatalog = ref([])
 const loading = ref(true)
 const error = ref(null)
@@ -25,9 +27,10 @@ async function load() {
   loading.value = true
   error.value = null
   try {
-    const [res, specRes, catalogRes] = await Promise.all([
+    const [res, specRes, depRes, catalogRes] = await Promise.all([
       api.integrationSettings.get(),
       api.specialists.list(),
+      api.departments.list(),
       api.taskUfCatalog.list().catch(() => ({ items: [] })),
     ])
     taskUfCatalog.value = (catalogRes.items || []).map((it) => ({ ...it, label_edit: it.label ?? '' }))
@@ -40,8 +43,10 @@ async function load() {
       sync_date_from: res.sync_date_from ?? null,
       sync_date_to: res.sync_date_to ?? null,
       sync_specialist_ids: Array.isArray(res.sync_specialist_ids) ? res.sync_specialist_ids : [],
+      planning_default_department_id: res.planning_default_department_id ?? null,
     }
     specialists.value = specRes.items ?? []
+    departments.value = depRes.items ?? []
   } catch (e) {
     error.value = e.message
   } finally {
@@ -74,6 +79,7 @@ async function save() {
       sync_date_from: settings.value.sync_date_range_type === 'custom' ? settings.value.sync_date_from : null,
       sync_date_to: settings.value.sync_date_range_type === 'custom' ? settings.value.sync_date_to : null,
       sync_specialist_ids: settings.value.sync_specialist_ids,
+      planning_default_department_id: settings.value.planning_default_department_id ?? null,
     })
     await load()
   } catch (e) {
@@ -227,6 +233,17 @@ onMounted(load)
                 <input v-model="settings.sync_date_to" type="date" class="input" />
               </label>
             </div>
+          </div>
+
+          <div class="form__block">
+            <span class="form__block-title">Отдел по умолчанию в планировании</span>
+            <small>При открытии страницы «Планирование» будет выбран этот отдел и подгружены данные.</small>
+            <label class="form__select-wrap">
+              <select v-model="settings.planning_default_department_id" class="input">
+                <option :value="null">— не задан —</option>
+                <option v-for="d in departments" :key="d.id" :value="d.id">{{ d.name }}</option>
+              </select>
+            </label>
           </div>
 
           <div class="form__block">

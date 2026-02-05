@@ -218,7 +218,7 @@ final class Application
         $this->router->get('/integration-settings', function (): array {
             $pdo = Database::getConnection();
             $repo = new IntegrationSettingsRepository($pdo);
-            $keys = ['portal_url', 'sync_interval_minutes', 'last_sync_at', 'sync_date_range_type', 'sync_date_from', 'sync_date_to', 'sync_specialist_ids'];
+            $keys = ['portal_url', 'sync_interval_minutes', 'last_sync_at', 'sync_date_range_type', 'sync_date_from', 'sync_date_to', 'sync_specialist_ids', 'planning_default_department_id'];
             $v = $repo->getValues($keys);
             $out = [
                 'portal_url' => $v['portal_url'] ?? '',
@@ -229,22 +229,29 @@ final class Application
                 'sync_date_from' => ($v['sync_date_from'] ?? '') !== '' ? $v['sync_date_from'] : null,
                 'sync_date_to' => ($v['sync_date_to'] ?? '') !== '' ? $v['sync_date_to'] : null,
                 'sync_specialist_ids' => [],
+                'planning_default_department_id' => null,
             ];
             if (isset($v['sync_specialist_ids']) && $v['sync_specialist_ids'] !== '') {
                 $decoded = json_decode($v['sync_specialist_ids'], true);
                 $out['sync_specialist_ids'] = is_array($decoded) ? $decoded : [];
+            }
+            if (isset($v['planning_default_department_id']) && $v['planning_default_department_id'] !== '') {
+                $out['planning_default_department_id'] = (int) $v['planning_default_department_id'];
             }
             return $out;
         });
         $this->router->post('/integration-settings', function (array $payload): array {
             $pdo = Database::getConnection();
             $repo = new IntegrationSettingsRepository($pdo);
-            $allowed = ['portal_url', 'webhook_token', 'sync_interval_minutes', 'sync_date_range_type', 'sync_date_from', 'sync_date_to', 'sync_specialist_ids'];
+            $allowed = ['portal_url', 'webhook_token', 'sync_interval_minutes', 'sync_date_range_type', 'sync_date_from', 'sync_date_to', 'sync_specialist_ids', 'planning_default_department_id'];
             foreach ($allowed as $key) {
                 if (!array_key_exists($key, $payload)) {
                     continue;
                 }
-                if ($key === 'sync_specialist_ids') {
+                if ($key === 'planning_default_department_id') {
+                    $val = $payload[$key];
+                    $repo->setValue($key, ($val !== null && $val !== '') ? (string) (int) $val : '');
+                } elseif ($key === 'sync_specialist_ids') {
                     $val = $payload[$key];
                     $repo->setValue($key, is_array($val) ? json_encode(array_values(array_map('intval', $val))) : '[]');
                 } elseif ($key === 'sync_date_range_type') {
@@ -259,8 +266,9 @@ final class Application
                     $repo->setValue($key, trim((string) $payload[$key]));
                 }
             }
-            $v = $repo->getValues(['portal_url', 'sync_interval_minutes', 'sync_date_range_type', 'sync_date_from', 'sync_date_to', 'sync_specialist_ids']);
+            $v = $repo->getValues(['portal_url', 'sync_interval_minutes', 'sync_date_range_type', 'sync_date_from', 'sync_date_to', 'sync_specialist_ids', 'planning_default_department_id']);
             $ids = isset($v['sync_specialist_ids']) && $v['sync_specialist_ids'] !== '' ? (json_decode($v['sync_specialist_ids'], true) ?: []) : [];
+            $defaultDepId = isset($v['planning_default_department_id']) && $v['planning_default_department_id'] !== '' ? (int) $v['planning_default_department_id'] : null;
             return [
                 'portal_url' => $v['portal_url'] ?? '',
                 'sync_interval_minutes' => (int) ($v['sync_interval_minutes'] ?? 30),
@@ -268,6 +276,7 @@ final class Application
                 'sync_date_from' => ($v['sync_date_from'] ?? '') !== '' ? $v['sync_date_from'] : null,
                 'sync_date_to' => ($v['sync_date_to'] ?? '') !== '' ? $v['sync_date_to'] : null,
                 'sync_specialist_ids' => $ids,
+                'planning_default_department_id' => $defaultDepId,
             ];
         });
 
