@@ -85,14 +85,6 @@ export const api = {
     get: (bitrix24TaskId) => api.get('/task-plan', { bitrix24_task_id: bitrix24TaskId }),
     save: (data) => api.put('/task-plan', data),
   },
-  // Справочник «проект B24 → тип работы» (регулярка/флайт)
-  projectWorkTypes: {
-    list: () => api.get('/project-work-types'),
-    get: (id) => api.get('/project-work-types', { id }),
-    create: (data) => api.post('/project-work-types', data),
-    update: (data) => api.put('/project-work-types', data),
-    delete: (id) => api.delete('/project-work-types', { id }),
-  },
 }
 
 export default api

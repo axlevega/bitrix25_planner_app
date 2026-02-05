@@ -26,12 +26,6 @@ const routes = [
     meta: { title: 'Настройки интеграции' },
   },
   {
-    path: '/project-work-types',
-    name: 'ProjectWorkTypes',
-    component: () => import('../views/ProjectWorkTypesView.vue'),
-    meta: { title: 'Типы проектов B24' },
-  },
-  {
     path: '/plan-entries',
     name: 'PlanEntries',
     component: () => import('../views/PlanEntriesView.vue'),

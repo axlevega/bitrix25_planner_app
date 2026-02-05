@@ -21,7 +21,7 @@
 - **001_initial_schema.sql** — таблицы: departments, specialists, work_types, bitrix24_*, integration_settings, sync_log.
 - **002_sync_state.sql** — колонки в integration_settings для постраничной синхронизации: sync_phase, sync_tasks_offset, sync_users_offset.
 - **003_plan_entries.sql** — таблица плановых записей: specialist_id, date_from, date_to, hours, work_type_id, source, bitrix24_task_id, note.
-- **004_project_work_type.sql** — справочник «проект B24 (group_id) → тип работы»: bitrix24_group_id, work_type_id (1=regular, 2=flight).
+- **004_project_work_type.sql** — справочник «проект B24 (group_id) → тип работы» (удалён в 018).
 - **005_task_elapsed.sql** — учёт времени по задачам B24 по дням: bitrix24_task_id, bitrix24_user_id, elapsed_date, minutes (для сетки планирования).
 - **006_sync_elapsed_state.sql** — колонка sync_elapsed_task_offset в integration_settings для фазы синхронизации elapsed (phase 2).
 - **007_task_plan_dates.sql** — колонки start_date_plan, end_date_plan, created_date в bitrix24_tasks_cache для расчёта планируемых трудозатрат по дням (план/факт в сетке).
@@ -34,3 +34,5 @@
 - **014_planning_default_department.sql** — настройка отдела по умолчанию для экрана планирования.
 - **015_time_estimate_seconds_to_minutes.sql** — приведение хранения оценки времени к минутам (если было в секундах).
 - **016_bitrix24_task_groups.sql** — таблица групп задач Bitrix24 (проекты): bitrix24_group_id, name; ключ sync_groups_offset; синхронизация через sonet.group.get (фаза 0 в общей синхронизации).
+- **017_bitrix24_task_status.sql** — статусы задач B24 (см. файл).
+- **018_drop_project_work_type.sql** — удаление таблицы project_work_type; тип задачи определяется пользовательским свойством в B24.

@@ -7,14 +7,12 @@ use PDO;
 
 /**
  * Расчёт загрузки специалиста/отдела за период: плановые записи + часы по задачам из кэша B24.
- * Разбивка по типам работ (регулярка/флайт), проверка лимита часов по флайтам.
+ * Разбивка по типам работ (регулярка/флайт) только по плановым записям; часы из B24 учитываются суммарно.
+ * Проверка лимита часов по флайтам (только по плану).
  */
 final class LoadService
 {
     private PDO $pdo;
-
-    /** @var array<string, int> group_id → work_type_id (1=regular, 2=flight), кэш для расчёта задач B24 */
-    private ?array $projectWorkTypeMap = null;
 
     public function __construct(PDO $pdo)
     {
@@ -40,13 +38,12 @@ final class LoadService
         $hoursPlan = $hoursPlanRegular + $hoursPlanFlight;
 
         $b24UserId = $spec['bitrix24_user_id'] ?? '';
-        $tasksByType = $b24UserId !== '' ? $this->getTaskHoursByType($b24UserId, $dateFrom, $dateTo) : ['regular' => 0.0, 'flight' => 0.0];
-        $hoursTasksRegular = $tasksByType['regular'];
-        $hoursTasksFlight = $tasksByType['flight'];
-        $hoursTasks = $hoursTasksRegular + $hoursTasksFlight;
+        $hoursTasks = $b24UserId !== '' ? $this->getTaskHoursTotal($b24UserId, $dateFrom, $dateTo) : 0.0;
+        $hoursTasksRegular = $hoursTasks;
+        $hoursTasksFlight = 0.0;
 
-        $hoursFlight = round($hoursPlanFlight + $hoursTasksFlight, 2);
-        $hoursRegular = round($hoursPlanRegular + $hoursTasksRegular, 2);
+        $hoursFlight = round($hoursPlanFlight, 2);
+        $hoursRegular = round($hoursPlanRegular + $hoursTasks, 2);
         $hoursTotal = round($hoursPlan + $hoursTasks, 2);
 
         $days = max(1, (strtotime($dateTo) - strtotime($dateFrom)) / 86400 + 1);
@@ -182,38 +179,17 @@ final class LoadService
     }
 
     /**
-     * Маппинг group_id → work_type_id из project_work_type (только flight=2; остальные regular).
-     * @return array<string, int>
+     * Суммарные часы по задачам B24 за период (без разбивки по типу работы).
      */
-    private function getProjectWorkTypeMap(): array
+    private function getTaskHoursTotal(string $bitrix24UserId, string $dateFrom, string $dateTo): float
     {
-        if ($this->projectWorkTypeMap !== null) {
-            return $this->projectWorkTypeMap;
-        }
-        $stmt = $this->pdo->query('SELECT bitrix24_group_id, work_type_id FROM project_work_type');
-        $map = [];
-        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-            $map[(string) $row['bitrix24_group_id']] = (int) $row['work_type_id'];
-        }
-        $this->projectWorkTypeMap = $map;
-        return $map;
-    }
-
-    /**
-     * Часы по задачам B24 за период, разбивка по типу работы (по group_id → project_work_type).
-     * @return array{regular: float, flight: float}
-     */
-    private function getTaskHoursByType(string $bitrix24UserId, string $dateFrom, string $dateTo): array
-    {
-        $map = $this->getProjectWorkTypeMap();
         $stmt = $this->pdo->prepare(
-            'SELECT group_id, deadline, time_estimate, time_spent FROM bitrix24_tasks_cache
+            'SELECT deadline, time_estimate, time_spent FROM bitrix24_tasks_cache
              WHERE responsible_user_id = ? AND deadline IS NOT NULL AND deadline >= ? AND deadline <= ?'
         );
         $stmt->execute([$bitrix24UserId, $dateFrom . ' 00:00:00', $dateTo . ' 23:59:59']);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        $regular = 0.0;
-        $flight = 0.0;
+        $total = 0.0;
         $now = date('Y-m-d H:i:s');
         foreach ($rows as $r) {
             $est = (int) ($r['time_estimate'] ?? 0);
@@ -222,17 +198,10 @@ final class LoadService
             $toHours = static function (int $v): float {
                 return $v / 60.0;
             };
-            $hours = ($deadline !== '' && $deadline < $now)
+            $total += ($deadline !== '' && $deadline < $now)
                 ? $toHours($spent)
                 : max(0.0, $toHours($est) - $toHours($spent));
-            $groupId = $r['group_id'] ?? '';
-            $workTypeId = $groupId !== '' && isset($map[$groupId]) ? $map[$groupId] : 1;
-            if ($workTypeId === 2) {
-                $flight += $hours;
-            } else {
-                $regular += $hours;
-            }
         }
-        return ['regular' => $regular, 'flight' => $flight];
+        return $total;
     }
 }

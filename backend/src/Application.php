@@ -413,62 +413,6 @@ final class Application
             return ['id' => $id, 'deleted' => $stmt->rowCount() > 0];
         });
 
-        // Справочник «проект B24 (group_id) → тип работы» (регулярка/флайт)
-        $this->router->get('/project-work-types', function (array $payload): array {
-            $pdo = Database::getConnection();
-            $id = $payload['id'] ?? null;
-            if ($id !== null && $id !== '') {
-                $stmt = $pdo->prepare('SELECT pwt.*, wt.code as work_type_code, wt.name as work_type_name FROM project_work_type pwt JOIN work_types wt ON pwt.work_type_id = wt.id WHERE pwt.id = ?');
-                $stmt->execute([$id]);
-                $row = $stmt->fetch(\PDO::FETCH_ASSOC);
-                return $row ?: ['error' => 'Not found'];
-            }
-            $stmt = $pdo->query('SELECT pwt.*, wt.code as work_type_code, wt.name as work_type_name FROM project_work_type pwt JOIN work_types wt ON pwt.work_type_id = wt.id ORDER BY pwt.bitrix24_group_id');
-            return ['items' => $stmt->fetchAll(\PDO::FETCH_ASSOC)];
-        });
-        $this->router->post('/project-work-types', function (array $payload): array {
-            $pdo = Database::getConnection();
-            $groupId = trim((string) ($payload['bitrix24_group_id'] ?? ''));
-            $workTypeId = (int) ($payload['work_type_id'] ?? 1);
-            if ($groupId === '') {
-                return ['error' => 'bitrix24_group_id обязателен'];
-            }
-            if ($workTypeId < 1 || $workTypeId > 2) {
-                return ['error' => 'work_type_id должен быть 1 (regular) или 2 (flight)'];
-            }
-            $pdo->prepare('INSERT INTO project_work_type (bitrix24_group_id, work_type_id) VALUES (?, ?)')
-                ->execute([$groupId, $workTypeId]);
-            return ['id' => (int) $pdo->lastInsertId(), 'bitrix24_group_id' => $groupId, 'work_type_id' => $workTypeId];
-        });
-        $this->router->put('/project-work-types', function (array $payload): array {
-            $pdo = Database::getConnection();
-            $id = (int) ($payload['id'] ?? 0);
-            if ($id <= 0) {
-                return ['error' => 'id обязателен'];
-            }
-            $stmt = $pdo->prepare('SELECT id FROM project_work_type WHERE id = ?');
-            $stmt->execute([$id]);
-            if (!$stmt->fetch()) {
-                return ['error' => 'Not found'];
-            }
-            $workTypeId = (int) ($payload['work_type_id'] ?? 1);
-            if ($workTypeId < 1 || $workTypeId > 2) {
-                return ['error' => 'work_type_id должен быть 1 или 2'];
-            }
-            $pdo->prepare('UPDATE project_work_type SET work_type_id = ? WHERE id = ?')->execute([$workTypeId, $id]);
-            return ['id' => $id, 'ok' => true];
-        });
-        $this->router->delete('/project-work-types', function (array $payload): array {
-            $pdo = Database::getConnection();
-            $id = (int) ($payload['id'] ?? 0);
-            if ($id <= 0) {
-                return ['error' => 'id обязателен'];
-            }
-            $stmt = $pdo->prepare('DELETE FROM project_work_type WHERE id = ?');
-            $stmt->execute([$id]);
-            return ['id' => $id, 'deleted' => $stmt->rowCount() > 0];
-        });
-
         // Сетка планирования: задачи выбранных специалистов + учёт времени по дням (для шахматки)
         $this->router->get('/planning-grid', function (array $payload): array {
             $pdo = Database::getConnection();
