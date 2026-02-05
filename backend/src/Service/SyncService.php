@@ -78,10 +78,13 @@ final class SyncService
 
         $client = new Client($url);
         $taskSelect = ['ID', 'TITLE', 'RESPONSIBLE_ID', 'DEADLINE', 'TIME_ESTIMATE', 'TIME_SPENT', 'DURATION_FACT', 'TIME_SPENT_IN_LOGS', 'STATUS', 'GROUP_ID', 'START_DATE_PLAN', 'END_DATE_PLAN', 'CREATED_DATE'];
-        if ($phase === 0 && $tasksOffset === 0) {
+        // Пользовательские поля: каталог обновляем только при первой странице; в select добавляем при каждой странице, иначе задачи со 2+ страницы приходят без UF и не попадают в bitrix24_task_custom_field.
+        if ($phase === 0) {
             $ufRaw = $client->getTaskUserFieldListRaw();
             if (empty($ufRaw['error']) && !empty($ufRaw['items'])) {
-                $this->refreshTaskUfCatalog($ufRaw['items']);
+                if ($tasksOffset === 0) {
+                    $this->refreshTaskUfCatalog($ufRaw['items']);
+                }
                 $names = [];
                 foreach ($ufRaw['items'] as $item) {
                     $name = $item['FIELD_NAME'] ?? $item['fieldName'] ?? null;
