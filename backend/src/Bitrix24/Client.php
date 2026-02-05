@@ -225,6 +225,29 @@ final class Client
     }
 
     /**
+     * Список рабочих групп (проектов задач) Bitrix24 — sonet_group.get (документация: underscore, не точка).
+     * Параметры: ORDER, FILTER; ответ result[] с полями ID, NAME и т.д. Пагинация через start (если API поддерживает).
+     *
+     * @return array{data: list<array>, error?: string, error_description?: string}
+     */
+    public function getGroupsOnePage(int $start, int $pageSize = 50): array
+    {
+        $params = [
+            'ORDER' => ['NAME' => 'ASC'],
+        ];
+        if ($start > 0) {
+            $params['start'] = $start;
+        }
+        $response = $this->call('sonet_group.get', $params);
+        if (!empty($response['error'])) {
+            return ['data' => [], 'error' => $response['error'], 'error_description' => $response['error_description'] ?? ''];
+        }
+        $result = $response['result'] ?? null;
+        $list = $this->extractListFromResult($result, 'result');
+        return ['data' => is_array($list) ? $list : []];
+    }
+
+    /**
      * Сырой ответ task.item.userfield.getlist — массив элементов с FIELD_NAME, LIST_COLUMN_LABEL и т.д.
      * Для построения каталога пользовательских полей (исключая системные).
      *

@@ -744,7 +744,7 @@ final class Application
             $pdo = Database::getConnection();
             $service = new SyncService($pdo);
             $mode = trim((string) ($payload['mode'] ?? 'full'));
-            if (!in_array($mode, [SyncService::MODE_FULL, SyncService::MODE_TASKS, SyncService::MODE_USERS], true)) {
+            if (!in_array($mode, [SyncService::MODE_FULL, SyncService::MODE_GROUPS, SyncService::MODE_TASKS, SyncService::MODE_USERS], true)) {
                 $mode = SyncService::MODE_FULL;
             }
             $result = $service->runChunk($mode);

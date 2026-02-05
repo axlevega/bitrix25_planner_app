@@ -31,3 +31,6 @@
 - **011_integration_settings_key_value.sql** — переход integration_settings на модель «одна строка = одна настройка» (setting_key, setting_value). Новые настройки добавляются без изменения схемы. Применять после 010.
 - **012_bitrix24_task_custom_field.sql** — таблица пользовательских полей задач Bitrix24 (UF_*): bitrix24_task_id, field_code, value_text; для фильтрации по кастомным полям (например «Флайт»).
 - **013_bitrix24_task_uf_catalog.sql** — каталог уникальных пользовательских полей (field_code, label); в 012 пишутся только значения по полям из каталога (системные поля вроде вложений/почты/CRM исключены).
+- **014_planning_default_department.sql** — настройка отдела по умолчанию для экрана планирования.
+- **015_time_estimate_seconds_to_minutes.sql** — приведение хранения оценки времени к минутам (если было в секундах).
+- **016_bitrix24_task_groups.sql** — таблица групп задач Bitrix24 (проекты): bitrix24_group_id, name; ключ sync_groups_offset; синхронизация через sonet.group.get (фаза 0 в общей синхронизации).

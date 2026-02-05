@@ -10,8 +10,8 @@ use PDO;
 /**
  * Синхронизация задач, пользователей и учёта времени по задачам из Bitrix24.
  * Постранично: задачи → пользователи → elapsed по задачам (task.elapseditem.getlist).
- * phase: 0=tasks, 1=users, 2=elapsed, 3=idle.
- * Режимы: full (всё подряд), tasks (только задачи + elapsed), users (только пользователи).
+ * phase: 0=groups, 1=tasks, 2=users, 3=elapsed, 4=idle.
+ * Режимы: full (всё подряд), groups (только группы), tasks (только задачи + elapsed), users (только пользователи).
  */
 final class SyncService
 {
@@ -20,6 +20,7 @@ final class SyncService
     private const ELAPSED_TASKS_PER_CHUNK = 10;
 
     public const MODE_FULL = 'full';
+    public const MODE_GROUPS = 'groups';
     public const MODE_TASKS = 'tasks';
     public const MODE_USERS = 'users';
 
@@ -45,41 +46,111 @@ final class SyncService
     {
         $url = $this->webhookUrl ?? $this->getWebhookFromSettings();
         if ($url === '' || $url === null) {
-            return ['success' => false, 'message' => 'Webhook URL не задан', 'tasks_count' => 0, 'users_count' => 0, 'elapsed_count' => 0, 'has_more' => false];
+            return ['success' => false, 'message' => 'Webhook URL не задан', 'tasks_count' => 0, 'users_count' => 0, 'elapsed_count' => 0, 'groups_count' => 0, 'has_more' => false];
         }
 
         $state = $this->getSyncState();
         $phase = (int) $state['sync_phase'];
+        $groupsOffset = (int) ($state['sync_groups_offset'] ?? 0);
         $tasksOffset = (int) $state['sync_tasks_offset'];
         $usersOffset = (int) $state['sync_users_offset'];
         $elapsedOffset = (int) ($state['sync_elapsed_task_offset'] ?? 0);
 
-        // При выборе режима «только сотрудники»/«только задачи» — сбрасываем на нужную фазу, если сейчас не в ней (иначе при phase=0 запустились бы задачи вместо сотрудников).
-        // В цикле (has_more) фронт шлёт тот же mode — не сбрасываем, продолжаем с текущей фазы.
-        if ($mode === self::MODE_USERS && $phase !== 1) {
+        // Режим «только группы» / «только сотрудники» / «только задачи» — сброс на нужную фазу.
+        if ($mode === self::MODE_GROUPS && $phase !== 0) {
+            $phase = 0;
+            $groupsOffset = 0;
+            $tasksOffset = 0;
+            $usersOffset = 0;
+            $elapsedOffset = 0;
+            $this->setSyncState($phase, $groupsOffset, $tasksOffset, $usersOffset, $elapsedOffset);
+        } elseif ($mode === self::MODE_USERS && $phase !== 2) {
+            $phase = 2;
+            $groupsOffset = 0;
+            $tasksOffset = 0;
+            $usersOffset = 0;
+            $elapsedOffset = 0;
+            $this->setSyncState($phase, $groupsOffset, $tasksOffset, $usersOffset, $elapsedOffset);
+        } elseif ($mode === self::MODE_TASKS && $phase !== 1 && $phase !== 3) {
             $phase = 1;
+            $groupsOffset = 0;
             $tasksOffset = 0;
             $usersOffset = 0;
             $elapsedOffset = 0;
-            $this->setSyncState($phase, $tasksOffset, $usersOffset, $elapsedOffset);
-        } elseif ($mode === self::MODE_TASKS && $phase !== 0 && $phase !== 2) {
+            $this->setSyncState($phase, $groupsOffset, $tasksOffset, $usersOffset, $elapsedOffset);
+        } elseif ($mode === self::MODE_FULL && $phase === 4) {
             $phase = 0;
+            $groupsOffset = 0;
             $tasksOffset = 0;
             $usersOffset = 0;
             $elapsedOffset = 0;
-            $this->setSyncState($phase, $tasksOffset, $usersOffset, $elapsedOffset);
-        } elseif ($mode === self::MODE_FULL && $phase === 3) {
-            $phase = 0;
-            $tasksOffset = 0;
-            $usersOffset = 0;
-            $elapsedOffset = 0;
-            $this->setSyncState($phase, $tasksOffset, $usersOffset, $elapsedOffset);
+            $this->setSyncState($phase, $groupsOffset, $tasksOffset, $usersOffset, $elapsedOffset);
         }
 
         $client = new Client($url);
-        $taskSelect = ['ID', 'TITLE', 'RESPONSIBLE_ID', 'DEADLINE', 'TIME_ESTIMATE', 'TIME_SPENT', 'DURATION_FACT', 'TIME_SPENT_IN_LOGS', 'STATUS', 'GROUP_ID', 'START_DATE_PLAN', 'END_DATE_PLAN', 'CREATED_DATE'];
-        // Пользовательские поля: каталог обновляем только при первой странице; в select добавляем при каждой странице, иначе задачи со 2+ страницы приходят без UF и не попадают в bitrix24_task_custom_field.
+
+        // Фаза 0: группы задач (проекты). Метод sonet.group.get может быть недоступен (нет прав/другой портал) — тогда пропускаем фазу.
         if ($phase === 0) {
+            $groupsResult = $client->getGroupsOnePage($groupsOffset, self::PAGE_SIZE);
+            if (!empty($groupsResult['error'])) {
+                $msg = $groupsResult['error_description'] ?? $groupsResult['error'] ?? '';
+                $skipGroups = ($groupsResult['error'] === 'ERROR_METHOD_NOT_FOUND'
+                    || stripos((string) $msg, 'method not found') !== false
+                    || stripos((string) $groupsResult['error'], 'NOT_FOUND') !== false);
+                if ($skipGroups) {
+                    $phase = 1;
+                    $groupsOffset = 0;
+                    $this->setSyncState($phase, $groupsOffset, $tasksOffset, $usersOffset, $elapsedOffset);
+                } else {
+                    return [
+                        'success' => false,
+                        'message' => $msg,
+                        'tasks_count' => 0,
+                        'users_count' => 0,
+                        'elapsed_count' => 0,
+                        'groups_count' => 0,
+                        'has_more' => false,
+                    ];
+                }
+            } else {
+            $groups = $groupsResult['data'] ?? [];
+            $groupsCount = count($groups);
+            $this->upsertTaskGroups($groups);
+            if ($groupsCount >= self::PAGE_SIZE) {
+                $groupsOffset += $groupsCount;
+                $this->setSyncState($phase, $groupsOffset, $tasksOffset, $usersOffset, $elapsedOffset);
+                return [
+                    'success' => true,
+                    'message' => 'Чанк групп',
+                    'tasks_count' => 0,
+                    'users_count' => 0,
+                    'elapsed_count' => 0,
+                    'groups_count' => $groupsCount,
+                    'has_more' => true,
+                ];
+            }
+            if ($mode === self::MODE_GROUPS) {
+                $this->updateLastSyncAt(date('Y-m-d H:i:s'));
+                $this->setSyncState(4, 0, 0, 0, 0);
+                return [
+                    'success' => true,
+                    'message' => 'Синхронизация групп завершена',
+                    'tasks_count' => 0,
+                    'users_count' => 0,
+                    'elapsed_count' => 0,
+                    'groups_count' => $groupsCount,
+                    'has_more' => false,
+                ];
+            }
+            $phase = 1;
+            $groupsOffset = 0;
+            $this->setSyncState($phase, $groupsOffset, $tasksOffset, $usersOffset, $elapsedOffset);
+            }
+        }
+
+        $taskSelect = ['ID', 'TITLE', 'RESPONSIBLE_ID', 'DEADLINE', 'TIME_ESTIMATE', 'TIME_SPENT', 'DURATION_FACT', 'TIME_SPENT_IN_LOGS', 'STATUS', 'GROUP_ID', 'START_DATE_PLAN', 'END_DATE_PLAN', 'CREATED_DATE'];
+        // Пользовательские поля: каталог обновляем только при первой странице задач; в select добавляем при каждой странице.
+        if ($phase === 1) {
             $ufRaw = $client->getTaskUserFieldListRaw();
             if (empty($ufRaw['error']) && !empty($ufRaw['items'])) {
                 if ($tasksOffset === 0) {
@@ -101,7 +172,7 @@ final class SyncService
         $tasksCount = 0;
         $usersCount = 0;
 
-        if ($phase === 0) {
+        if ($phase === 1) {
             [$dateFrom, $dateTo] = $this->getSyncDateRange();
             $filter = ['>=CREATED_DATE' => $dateFrom];
             if ($dateTo !== null) {
@@ -119,6 +190,7 @@ final class SyncService
                     'tasks_count' => 0,
                     'users_count' => 0,
                     'elapsed_count' => 0,
+                    'groups_count' => 0,
                     'has_more' => false,
                 ];
             }
@@ -133,22 +205,24 @@ final class SyncService
             $this->upsertTasks($tasks);
             if ($tasksCount >= self::PAGE_SIZE) {
                 $tasksOffset += $tasksCount;
+                $this->setSyncState($phase, 0, $tasksOffset, $usersOffset, $elapsedOffset);
             } else {
                 $tasksOffset = 0;
-                $phase = ($mode === self::MODE_TASKS) ? 2 : 1;
+                $phase = ($mode === self::MODE_TASKS) ? 3 : 2;
+                $this->setSyncState($phase, 0, $tasksOffset, $usersOffset, $elapsedOffset);
             }
-            $this->setSyncState($phase, $tasksOffset, $usersOffset, $elapsedOffset);
             return [
                 'success' => true,
-                'message' => $phase === 2 ? 'Задачи загружены, далее учёт времени' : ($phase === 1 ? 'Задачи загружены, далее пользователи' : 'Чанк задач'),
+                'message' => $phase === 3 ? 'Задачи загружены, далее учёт времени' : ($phase === 2 ? 'Задачи загружены, далее пользователи' : 'Чанк задач'),
                 'tasks_count' => $tasksCount,
                 'users_count' => 0,
                 'elapsed_count' => 0,
+                'groups_count' => 0,
                 'has_more' => true,
             ];
         }
 
-        if ($phase === 1) {
+        if ($phase === 2) {
             $usersResult = $client->callOnePage('user.get', 'result', $usersOffset, self::PAGE_SIZE, $userSelect, []);
             if (!empty($usersResult['error'])) {
                 return [
@@ -157,6 +231,7 @@ final class SyncService
                     'tasks_count' => 0,
                     'users_count' => 0,
                     'elapsed_count' => 0,
+                    'groups_count' => 0,
                     'has_more' => true,
                 ];
             }
@@ -165,36 +240,38 @@ final class SyncService
             $this->upsertUsers($users);
             if ($usersCount >= self::PAGE_SIZE) {
                 $usersOffset += $usersCount;
-                $this->setSyncState($phase, $tasksOffset, $usersOffset, $elapsedOffset);
+                $this->setSyncState($phase, 0, $tasksOffset, $usersOffset, $elapsedOffset);
                 return [
                     'success' => true,
                     'message' => 'Чанк пользователей',
                     'tasks_count' => 0,
                     'users_count' => $usersCount,
                     'elapsed_count' => 0,
+                    'groups_count' => 0,
                     'has_more' => true,
                 ];
             }
             if ($mode === self::MODE_USERS) {
                 $this->updateLastSyncAt(date('Y-m-d H:i:s'));
-                $this->setSyncState(3, 0, 0, 0);
+                $this->setSyncState(4, 0, 0, 0, 0);
                 return [
                     'success' => true,
                     'message' => 'Синхронизация сотрудников завершена',
                     'tasks_count' => 0,
                     'users_count' => $usersCount,
                     'elapsed_count' => 0,
+                    'groups_count' => 0,
                     'has_more' => false,
                 ];
             }
-            $phase = 2;
+            $phase = 3;
             $usersOffset = 0;
             $elapsedOffset = 0;
-            $this->setSyncState($phase, $tasksOffset, $usersOffset, $elapsedOffset);
-            // fall through to phase 2 (elapsed) in same run
+            $this->setSyncState($phase, 0, $tasksOffset, $usersOffset, $elapsedOffset);
+            // fall through to phase 3 (elapsed) in same run
         }
 
-        if ($phase === 2) {
+        if ($phase === 3) {
             [$dateFrom, $dateTo] = $this->getSyncDateRange();
             $taskIds = $this->getTaskIdsForElapsedSync($elapsedOffset, self::ELAPSED_TASKS_PER_CHUNK, $dateFrom, $dateTo);
             $elapsedCount = 0;
@@ -226,47 +303,51 @@ final class SyncService
             }
             $elapsedOffset += count($taskIds);
             if (count($taskIds) < self::ELAPSED_TASKS_PER_CHUNK) {
-                $phase = 3;
+                $phase = 4;
                 $elapsedOffset = 0;
                 $this->updateLastSyncAt($syncedAt);
-                $this->setSyncState($phase, $tasksOffset, $usersOffset, $elapsedOffset);
+                $this->setSyncState($phase, 0, $tasksOffset, $usersOffset, $elapsedOffset);
                 return [
                     'success' => true,
-                    'message' => 'Синхронизация завершена (задачи, пользователи, учёт времени)',
+                    'message' => 'Синхронизация завершена (группы, задачи, пользователи, учёт времени)',
                     'tasks_count' => 0,
                     'users_count' => 0,
                     'elapsed_count' => $elapsedCount,
+                    'groups_count' => 0,
                     'has_more' => false,
                 ];
             }
-            $this->setSyncState($phase, $tasksOffset, $usersOffset, $elapsedOffset);
+            $this->setSyncState($phase, 0, $tasksOffset, $usersOffset, $elapsedOffset);
             return [
                 'success' => true,
                 'message' => 'Чанк учёта времени по задачам',
                 'tasks_count' => 0,
                 'users_count' => 0,
                 'elapsed_count' => $elapsedCount,
+                'groups_count' => 0,
                 'has_more' => true,
             ];
         }
 
-        return ['success' => true, 'message' => 'OK', 'tasks_count' => 0, 'users_count' => 0, 'elapsed_count' => 0, 'has_more' => false];
+        return ['success' => true, 'message' => 'OK', 'tasks_count' => 0, 'users_count' => 0, 'elapsed_count' => 0, 'groups_count' => 0, 'has_more' => false];
     }
 
     private function getSyncState(): array
     {
-        $v = $this->settings->getValues(['sync_phase', 'sync_tasks_offset', 'sync_users_offset', 'sync_elapsed_task_offset']);
+        $v = $this->settings->getValues(['sync_phase', 'sync_groups_offset', 'sync_tasks_offset', 'sync_users_offset', 'sync_elapsed_task_offset']);
         return [
-            'sync_phase' => (int) ($v['sync_phase'] ?? 3),
+            'sync_phase' => (int) ($v['sync_phase'] ?? 4),
+            'sync_groups_offset' => (int) ($v['sync_groups_offset'] ?? 0),
             'sync_tasks_offset' => (int) ($v['sync_tasks_offset'] ?? 0),
             'sync_users_offset' => (int) ($v['sync_users_offset'] ?? 0),
             'sync_elapsed_task_offset' => (int) ($v['sync_elapsed_task_offset'] ?? 0),
         ];
     }
 
-    private function setSyncState(int $phase, int $tasksOffset, int $usersOffset, int $elapsedOffset = 0): void
+    private function setSyncState(int $phase, int $groupsOffset, int $tasksOffset, int $usersOffset, int $elapsedOffset = 0): void
     {
         $this->settings->setValue('sync_phase', (string) $phase);
+        $this->settings->setValue('sync_groups_offset', (string) $groupsOffset);
         $this->settings->setValue('sync_tasks_offset', (string) $tasksOffset);
         $this->settings->setValue('sync_users_offset', (string) $usersOffset);
         $this->settings->setValue('sync_elapsed_task_offset', (string) $elapsedOffset);
@@ -529,6 +610,32 @@ final class SyncService
             $out[(string) $code] = true;
         }
         return $out;
+    }
+
+    private function upsertTaskGroups(array $groups): void
+    {
+        $syncedAt = date('Y-m-d H:i:s');
+        try {
+            $stmt = $this->pdo->prepare(
+                'INSERT INTO bitrix24_task_groups (bitrix24_group_id, name, synced_at)
+                 VALUES (?, ?, ?)
+                 ON DUPLICATE KEY UPDATE name = VALUES(name), synced_at = VALUES(synced_at)'
+            );
+        } catch (\Throwable $e) {
+            return;
+        }
+        foreach ($groups as $g) {
+            $id = $g['ID'] ?? $g['id'] ?? null;
+            if ($id === null) {
+                continue;
+            }
+            $name = $g['NAME'] ?? $g['name'] ?? null;
+            $stmt->execute([
+                (string) $id,
+                $name !== null ? (string) $name : null,
+                $syncedAt,
+            ]);
+        }
     }
 
     private function upsertUsers(array $users): void
