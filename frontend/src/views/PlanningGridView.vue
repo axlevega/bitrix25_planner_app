@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, nextTick } from 'vue'
 import { api } from '../api/client'
 
 const specialists = ref([])
@@ -20,6 +20,8 @@ const filterUfFieldCode = ref('')
 const filterUfValue = ref('')
 /** Каталог UF-полей (подписи и список для фильтра) */
 const taskUfCatalog = ref([])
+/** Ref контейнера скролла таблицы (для автоскролла до первого заполненного дня) */
+const tableScrollWrapRef = ref(null)
 
 /** Модалка переплана */
 const showReplanModal = ref(false)
@@ -35,10 +37,13 @@ const replanForm = ref({
   hoursByDate: {}, // date -> string (input value)
 })
 
+/** По умолчанию: последние 60 дней и будущие 30 дней от сегодня */
 function defaultPeriod() {
   const now = new Date()
-  const start = new Date(now.getFullYear(), now.getMonth() - 1, 1)
-  const end = new Date(now.getFullYear(), now.getMonth(), 0)
+  const start = new Date(now)
+  start.setDate(start.getDate() - 60)
+  const end = new Date(now)
+  end.setDate(end.getDate() + 30)
   dateFrom.value = start.toISOString().slice(0, 10)
   dateTo.value = end.toISOString().slice(0, 10)
 }
@@ -91,6 +96,22 @@ const filteredTasks = computed(() => {
     const n = Number(v)
     return n > 0
   })
+})
+
+/** Есть ли в этот день хотя бы одно заполненное значение (план или факт по любой задаче) */
+function hasFilledValueForDay(day) {
+  for (const t of filteredTasks.value) {
+    if (planHoursForTaskDay(t, day)) return true
+    if (hoursForTaskDay(t.bitrix24_task_id, day)) return true
+    if (t.has_plan_override && originalPlanHoursForTaskDay(t, day)) return true
+  }
+  return false
+}
+
+/** Первая дата в периоде с заполненной ячейкой (план или факт) */
+const firstFilledDate = computed(() => {
+  const list = days.value || []
+  return list.find((d) => hasFilledValueForDay(d)) ?? null
 })
 
 function hoursForTaskDay(taskId, date) {
@@ -183,15 +204,23 @@ function factHoursTotal(task) {
 
 async function loadRefs() {
   try {
-    const [specRes, depRes, catalogRes] = await Promise.all([
+    const [specRes, depRes, catalogRes, settingsRes] = await Promise.all([
       api.specialists.list(),
       api.departments.list(),
       api.taskUfCatalog.list().catch(() => ({ items: [] })),
+      api.integrationSettings.get().catch(() => ({})),
     ])
     specialists.value = specRes.items || []
     departments.value = depRes.items || []
     taskUfCatalog.value = catalogRes.items || []
     if (!dateFrom.value || !dateTo.value) defaultPeriod()
+
+    const defaultDepId = settingsRes.planning_default_department_id
+    if (defaultDepId && departments.value.some((d) => Number(d.id) === Number(defaultDepId))) {
+      scopeType.value = 'department'
+      departmentId.value = defaultDepId
+      await loadGrid()
+    }
   } catch (e) {
     error.value = e.message
   }
@@ -227,11 +256,31 @@ async function loadGrid() {
     }
     gridData.value = await api.planningGrid(params)
     if (gridData.value?.task_uf_catalog?.length) taskUfCatalog.value = gridData.value.task_uf_catalog
+    await nextTick()
+    scrollToFirstFilledColumn()
   } catch (e) {
     error.value = e.message
   } finally {
     loading.value = false
   }
+}
+
+/** Скроллит таблицу по горизонтали до первого дня с заполненной ячейкой (план или факт). Учитывает ширину зафиксированных колонок (Задача, Специалист, Часы). */
+function scrollToFirstFilledColumn() {
+  const date = firstFilledDate.value
+  if (!date) return
+  const wrap = tableScrollWrapRef.value
+  if (!wrap) return
+  const th = wrap.querySelector(`th.th-day[data-date="${date}"]`)
+  if (!th) return
+  const lastFixed = wrap.querySelector('th.th-hours')
+  if (!lastFixed) return
+  const wrapRect = wrap.getBoundingClientRect()
+  const thRect = th.getBoundingClientRect()
+  const fixedRight = lastFixed.getBoundingClientRect().right
+  const fixedWidth = fixedRight - wrapRect.left
+  const scrollDelta = thRect.left - (wrapRect.left + fixedWidth)
+  if (scrollDelta > 0) wrap.scrollLeft += scrollDelta
 }
 
 /** Дни для модалки переплана (период сетки) */
@@ -389,14 +438,14 @@ onMounted(loadRefs)
     <section v-if="gridData && !gridData.error" class="grid-section">
       <h2>Задачи и учёт времени по дням</h2>
       <p class="muted">Период: {{ gridData.date_from }} — {{ gridData.date_to }}</p>
-      <div class="table-scroll-wrap">
+      <div ref="tableScrollWrapRef" class="table-scroll-wrap">
         <table class="grid-table">
           <thead>
             <tr>
               <th class="th-fixed th-task">Задача / тип</th>
               <th class="th-fixed th-spec">Специалист</th>
               <th class="th-fixed th-hours">Часы</th>
-              <th v-for="day in days" :key="day" class="th-day" :class="{ 'th-day--weekend': isWeekend(day) }">{{ day.slice(8, 10) }}.{{ day.slice(5, 7) }}</th>
+              <th v-for="day in days" :key="day" class="th-day" :class="{ 'th-day--weekend': isWeekend(day) }" :data-date="day">{{ day.slice(8, 10) }}.{{ day.slice(5, 7) }}</th>
             </tr>
           </thead>
           <tbody>
@@ -420,17 +469,17 @@ onMounted(loadRefs)
                   </td>
                   <td :rowspan="taskRowCount(t)" class="td-fixed td-spec">{{ specialistNameByB24Id[t.responsible_user_id] || t.responsible_user_id || '—' }}</td>
                 </template>
-                <td class="td-fixed td-hours">
+                <td class="td-fixed td-hours">План: 
                   {{ planHours(t) }}
                   <button type="button" class="btn-replan" title="Изменить план" @click="openReplanModal(t)" aria-label="Изменить план">
-                  <svg class="icon-pencil" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+                  <svg class="icon-pencil" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
                 </button>
                 </td>
                 <td v-for="day in days" :key="day" class="td-day td-day--plan" :class="{ 'td-day--weekend': isWeekend(day), 'td-day--filled': planHoursForTaskDay(t, day) }">{{ planHoursForTaskDay(t, day) }}</td>
               </tr>
               <!-- Подстрока Факт (светло-оранжевый); ячейки Задача и Специалист объединены сверху -->
               <tr class="row-fact">
-                <td class="td-fixed td-hours">{{ factHoursTotal(t) }}</td>
+                <td class="td-fixed td-hours">Факт: {{ factHoursTotal(t) }}</td>
                 <td v-for="day in days" :key="day" class="td-day td-day--fact" :class="{ 'td-day--weekend': isWeekend(day), 'td-day--filled': hoursForTaskDay(t.bitrix24_task_id, day) }">{{ hoursForTaskDay(t.bitrix24_task_id, day) }}</td>
               </tr>
             </template>
@@ -515,8 +564,8 @@ onMounted(loadRefs)
   border: 1px solid #e2e8f0;
   border-radius: 6px;
 }
-.grid-table { border-collapse: collapse; font-size: 0.85rem; min-width: 100%; background: #fff; }
-.grid-table th, .grid-table td { padding: 0.35rem 0.5rem; border: 1px solid #e2e8f0; text-align: left; white-space: nowrap; background: #fff; }
+.grid-table { border-collapse: collapse; font-size: 0.75rem; min-width: 100%; background: #fff; }
+.grid-table th, .grid-table td { padding: 0.05rem 0.2rem; border: 1px solid #e2e8f0; text-align: left; white-space: nowrap; background: #fff; }
 .grid-table th { background: #f8fafc; font-weight: 600; }
 .grid-table .th-day, .grid-table .td-day { text-align: center; min-width: 2.5rem; }
 
@@ -529,6 +578,7 @@ onMounted(loadRefs)
 }
 .grid-table th.th-fixed { z-index: 2; background: #f8fafc; }
 .th-task, .td-task { left: 0; min-width: 200px; max-width: 200px; white-space: normal; }
+.td-task, .td-spec {font-size: 0.9rem;}
 .th-spec, .td-spec { left: 200px; min-width: 120px; max-width: 120px; }
 .th-hours, .td-hours { left: 320px; min-width: 56px; max-width: 56px; }
 .grid-table .row-plan .td-hours { min-width: 8rem; max-width: none; white-space: normal; }
@@ -553,7 +603,7 @@ onMounted(loadRefs)
 .row-type--plan, .row-type--replanned { color: #0369a1; }
 .row-type--fact { color: #c2410c; }
 .td-task-fact { padding-left: 1rem; }
-.btn-replan { margin-left: 0.5rem; padding: 0.25rem; border: 1px solid #0ea5e9; border-radius: 4px; background: #e0f2fe; color: #0369a1; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.btn-replan { margin-left: 0.2rem; padding: 0.02rem; border: none; background-color: transparent; border-radius: 4px; color: #0369a1; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
 .btn-replan:hover { background: #bae6fd; }
 .icon-pencil { display: block; }
 
