@@ -20,6 +20,10 @@ const filterUfFieldCode = ref('')
 const filterUfValue = ref('')
 /** Каталог UF-полей (подписи и список для фильтра) */
 const taskUfCatalog = ref([])
+/** Группы задач B24 (проекты) для фильтра */
+const taskGroups = ref([])
+/** Выбранные группы для фильтра (по умолчанию все); пустой массив = все группы */
+const selectedGroupIds = ref([])
 /** Ref контейнера скролла таблицы (для автоскролла до первого заполненного дня) */
 const tableScrollWrapRef = ref(null)
 /** Ref блока над таблицей (заголовок страницы + фильтры + заголовок секции) для расчёта высоты таблицы */
@@ -107,7 +111,6 @@ function hasFilledValueForDay(day) {
   for (const t of filteredTasks.value) {
     if (planHoursForTaskDay(t, day)) return true
     if (hoursForTaskDay(t.bitrix24_task_id, day)) return true
-    if (t.has_plan_override && originalPlanHoursForTaskDay(t, day)) return true
   }
   return false
 }
@@ -129,9 +132,9 @@ function hoursForTaskDay(taskId, date) {
   return h === '0.0' ? '' : h
 }
 
-/** Количество подстрок по задаче: с перепланом 3 (Исх./Переплан/Факт), без — 2 (План/Факт). */
+/** Количество подстрок по задаче: всегда 2 (План/Переплан и Факт); при переплане строка плана показывает переплан. */
 function taskRowCount(task) {
-  return task.has_plan_override ? 3 : 2
+  return 2
 }
 
 function taskLink(task) {
@@ -211,15 +214,23 @@ function factHoursTotal(task) {
 
 async function loadRefs() {
   try {
-    const [specRes, depRes, catalogRes, settingsRes] = await Promise.all([
+    const [specRes, depRes, catalogRes, groupsRes, settingsRes] = await Promise.all([
       api.specialists.list(),
       api.departments.list(),
       api.taskUfCatalog.list().catch(() => ({ items: [] })),
+      api.taskGroups.list().catch(() => ({ items: [] })),
       api.integrationSettings.get().catch(() => ({})),
     ])
     specialists.value = specRes.items || []
     departments.value = depRes.items || []
     taskUfCatalog.value = catalogRes.items || []
+    taskGroups.value = groupsRes.items || []
+    const defaultGroupIds = settingsRes.planning_default_group_ids
+    if (Array.isArray(defaultGroupIds) && defaultGroupIds.length > 0) {
+      selectedGroupIds.value = defaultGroupIds.map(String)
+    } else if (selectedGroupIds.value.length === 0 && taskGroups.value.length > 0) {
+      selectedGroupIds.value = taskGroups.value.map((g) => g.bitrix24_group_id)
+    }
     if (!dateFrom.value || !dateTo.value) defaultPeriod()
 
     const defaultDepId = settingsRes.planning_default_department_id
@@ -260,6 +271,11 @@ async function loadGrid() {
     if (filterUfFieldCode.value && filterUfValue.value !== '') {
       params.filter_uf_field_code = filterUfFieldCode.value
       params.filter_uf_value = filterUfValue.value
+    }
+    const totalGroups = taskGroups.value.length
+    const selected = selectedGroupIds.value || []
+    if (totalGroups > 0 && selected.length > 0 && selected.length < totalGroups) {
+      params.group_ids = selected.join(',')
     }
     gridData.value = await api.planningGrid(params)
     if (gridData.value?.task_uf_catalog?.length) taskUfCatalog.value = gridData.value.task_uf_catalog
@@ -410,7 +426,7 @@ onUnmounted(() => {
   <div class="page">
     <div ref="aboveTableRef" class="planning-above-table">
       <h1 class="page__title">Планирование (сетка)</h1>
-      <p class="page__desc">Сетка по задачам Bitrix24: у каждой задачи подстроки — <strong>План</strong> (светло-голубой), <strong>Факт</strong> (светло-оранжевый). При переплане ПМ добавляется строка <strong>Исх. план</strong> (светло-зелёный). Колонки — дни. Запустите синхронизацию в настройках интеграции.</p>
+      <p class="page__desc">Сетка по задачам Bitrix24: у каждой задачи подстроки — <strong>План</strong> (светло-голубой), <strong>Факт</strong> (светло-оранжевый). При переплане ПМ в строке плана отображаются данные переплана. Колонки — дни. Запустите синхронизацию в настройках интеграции.</p>
 
       <p v-if="error" class="error">{{ error }}</p>
 
@@ -437,6 +453,16 @@ onUnmounted(() => {
       </label>
       <label>С <input v-model="dateFrom" type="date" class="input" /></label>
       <label>По <input v-model="dateTo" type="date" class="input" /></label>
+      <template v-if="taskGroups.length">
+        <label class="filter-multi">
+          <span>Группы (проекты):</span>
+          <select v-model="selectedGroupIds" class="input" multiple size="3">
+            <option v-for="g in taskGroups" :key="g.bitrix24_group_id" :value="g.bitrix24_group_id">
+              {{ g.name || g.bitrix24_group_id }}
+            </option>
+          </select>
+        </label>
+      </template>
       <label class="filter-checkbox">
         <input v-model="hideTasksWithoutPlan" type="checkbox" />
         Скрыть задачи без планового времени
@@ -484,26 +510,14 @@ onUnmounted(() => {
           </thead>
           <tbody>
             <template v-for="t in filteredTasks" :key="t.bitrix24_task_id">
-              <!-- При переплане: подстрока «Исх. план» (светло-зелёный); объединённые ячейки Задача и Специалист -->
-              <tr v-if="t.has_plan_override" class="row-original">
+              <!-- Подстрока План / Переплан (светло-голубой); при переплане отображаются данные переплана вместо исходного плана -->
+              <tr class="row-plan" :class="{ 'row-plan--replan': t.has_plan_override }">
                 <td :rowspan="taskRowCount(t)" class="td-fixed td-task" :title="t.title">
                   <a v-if="taskLink(t)" :href="taskLink(t)" target="_blank" rel="noopener noreferrer" class="task-link">{{ (t.title || '').slice(0, 40) }}{{ (t.title || '').length > 40 ? '…' : '' }}</a>
                   <span v-else>{{ (t.title || '').slice(0, 40) }}{{ (t.title || '').length > 40 ? '…' : '' }}</span>
                 </td>
                 <td :rowspan="taskRowCount(t)" class="td-fixed td-spec">{{ specialistNameByB24Id[t.responsible_user_id] || t.responsible_user_id || '—' }}</td>
-                <td class="td-fixed td-hours">{{ originalPlanHoursTotalInPeriod(t) }}</td>
-                <td v-for="day in days" :key="day" class="td-day td-day--original" :class="{ 'td-day--weekend': isWeekend(day) }">{{ originalPlanHoursForTaskDay(t, day) }}</td>
-              </tr>
-              <!-- Подстрока План / Переплан (светло-голубой); без переплана — здесь объединённые ячейки -->
-              <tr class="row-plan">
-                <template v-if="!t.has_plan_override">
-                  <td :rowspan="taskRowCount(t)" class="td-fixed td-task" :title="t.title">
-                    <a v-if="taskLink(t)" :href="taskLink(t)" target="_blank" rel="noopener noreferrer" class="task-link">{{ (t.title || '').slice(0, 40) }}{{ (t.title || '').length > 40 ? '…' : '' }}</a>
-                    <span v-else>{{ (t.title || '').slice(0, 40) }}{{ (t.title || '').length > 40 ? '…' : '' }}</span>
-                  </td>
-                  <td :rowspan="taskRowCount(t)" class="td-fixed td-spec">{{ specialistNameByB24Id[t.responsible_user_id] || t.responsible_user_id || '—' }}</td>
-                </template>
-                <td class="td-fixed td-hours">План: 
+                <td class="td-fixed td-hours">{{ t.has_plan_override ? 'Переплан: ' : 'План: ' }} 
                   {{ planHours(t) }}
                   <button type="button" class="btn-replan" title="Изменить план" @click="openReplanModal(t)" aria-label="Изменить план">
                   <svg class="icon-pencil" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
@@ -635,10 +649,13 @@ onUnmounted(() => {
 /* Заполненные плановые ячейки — голубой; заполненные фактические — оранжевый */
 .grid-table .row-plan .td-day--plan.td-day--filled { background: #e0f2fe; }
 .grid-table .row-plan .td-day--plan.td-day--filled.td-day--weekend { background: #bae6fd !important; }
+/* Переплан — заполненные ячейки светло-красные */
+.grid-table .row-plan--replan .td-day--plan.td-day--filled { background: #fecaca; }
+.grid-table .row-plan--replan .td-day--plan.td-day--filled.td-day--weekend { background: #fca5a5 !important; }
 .grid-table .row-fact .td-day--fact.td-day--filled { background: #ffedd5; }
 .grid-table .row-fact .td-day--fact.td-day--filled.td-day--weekend { background: #fed7aa !important; }
 
-.grid-table .row-plan .td-fixed, .grid-table .row-fact .td-fixed, .grid-table .row-original .td-fixed {background-color: #f5f5f5;}
+.grid-table .row-plan .td-fixed, .grid-table .row-fact .td-fixed { background-color: #f5f5f5; }
 
 /* Подписи типа строки */
 .row-type { font-size: 0.75rem; margin-left: 0.35rem; }

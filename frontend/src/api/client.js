@@ -71,6 +71,10 @@ export const api = {
   load: (params) => api.get('/load', params),
   // Сетка планирования: задачи + учёт времени по дням из B24
   planningGrid: (params) => api.get('/planning-grid', params),
+  // Группы задач B24 (проекты) для фильтра в сетке планирования
+  taskGroups: {
+    list: () => api.get('/task-groups'),
+  },
   // Каталог пользовательских полей задач (подписи и фильтр по полям)
   taskUfCatalog: {
     list: () => api.get('/task-uf-catalog'),
