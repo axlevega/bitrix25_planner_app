@@ -43,6 +43,7 @@
 - [x] **specialists** — id, bitrix24_user_id, department_id, name (или из B24), norm_hours_per_day, norm_hours_per_week, flight_hours_limit_per_day (или per_week), is_active, created_at, updated_at
 - [x] **work_types** — id, code (regular/flight), name — справочник типов работ (регулярка / флайт)
 - [x] **bitrix24_tasks_cache** — id, bitrix24_task_id, title, responsible_user_id, deadline, time_estimate, time_spent, status, group_id (проект задачи), synced_at, raw_json (опционально)
+- [x] **bitrix24_task_status** — справочник статусов задач B24 (bitrix24_status_id, name) для отображения названий в публичной части
 - [x] **bitrix24_users_cache** — id, bitrix24_user_id, name, email, synced_at — для маппинга и отображения
 - [x] **integration_settings** — id, portal_url, webhook_token (или отдельная таблица credentials), sync_interval_minutes, last_sync_at, created_at, updated_at
 - [x] **sync_log** — id, started_at, finished_at, status (success/error), message, tasks_count (опционально)
