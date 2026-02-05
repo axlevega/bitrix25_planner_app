@@ -18,9 +18,9 @@
 
 ## Список миграций
 
-- **001_initial_schema.sql** — таблицы: departments, specialists, work_types, bitrix24_*, integration_settings, sync_log.
+- **001_initial_schema.sql** — таблицы: departments, specialists, work_types (удалён в 019), bitrix24_*, integration_settings, sync_log.
 - **002_sync_state.sql** — колонки в integration_settings для постраничной синхронизации: sync_phase, sync_tasks_offset, sync_users_offset.
-- **003_plan_entries.sql** — таблица плановых записей: specialist_id, date_from, date_to, hours, work_type_id, source, bitrix24_task_id, note.
+- **003_plan_entries.sql** — таблица плановых записей (удалена в 019).
 - **004_project_work_type.sql** — справочник «проект B24 (group_id) → тип работы» (удалён в 018).
 - **005_task_elapsed.sql** — учёт времени по задачам B24 по дням: bitrix24_task_id, bitrix24_user_id, elapsed_date, minutes (для сетки планирования).
 - **006_sync_elapsed_state.sql** — колонка sync_elapsed_task_offset в integration_settings для фазы синхронизации elapsed (phase 2).
@@ -36,3 +36,4 @@
 - **016_bitrix24_task_groups.sql** — таблица групп задач Bitrix24 (проекты): bitrix24_group_id, name; ключ sync_groups_offset; синхронизация через sonet.group.get (фаза 0 в общей синхронизации).
 - **017_bitrix24_task_status.sql** — статусы задач B24 (см. файл).
 - **018_drop_project_work_type.sql** — удаление таблицы project_work_type; тип задачи определяется пользовательским свойством в B24.
+- **019_drop_plan_entries_and_work_types.sql** — удаление таблиц plan_entries и work_types; загрузка считается только по задачам B24.

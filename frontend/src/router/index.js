@@ -26,12 +26,6 @@ const routes = [
     meta: { title: 'Настройки интеграции' },
   },
   {
-    path: '/plan-entries',
-    name: 'PlanEntries',
-    component: () => import('../views/PlanEntriesView.vue'),
-    meta: { title: 'Плановые записи' },
-  },
-  {
     path: '/dashboard',
     name: 'Dashboard',
     component: () => import('../views/DashboardView.vue'),

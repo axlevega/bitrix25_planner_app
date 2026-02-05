@@ -6,9 +6,7 @@ namespace App\Service;
 use PDO;
 
 /**
- * Расчёт загрузки специалиста/отдела за период: плановые записи + часы по задачам из кэша B24.
- * Разбивка по типам работ (регулярка/флайт) только по плановым записям; часы из B24 учитываются суммарно.
- * Проверка лимита часов по флайтам (только по плану).
+ * Расчёт загрузки специалиста/отдела за период: часы по задачам из кэша B24.
  */
 final class LoadService
 {
@@ -20,8 +18,7 @@ final class LoadService
     }
 
     /**
-     * Загрузка по специалисту за период.
-     * Часы по плану и по задачам B24 с разбивкой regular/flight; проверка лимита флайтов.
+     * Загрузка по специалисту за период (только часы по задачам B24).
      */
     public function getSpecialistLoad(int $specialistId, string $dateFrom, string $dateTo): array
     {
@@ -32,19 +29,17 @@ final class LoadService
             return ['error' => 'Specialist not found'];
         }
 
-        $planByType = $this->getPlanHoursByType($specialistId, $dateFrom, $dateTo);
-        $hoursPlanRegular = $planByType['regular'];
-        $hoursPlanFlight = $planByType['flight'];
-        $hoursPlan = $hoursPlanRegular + $hoursPlanFlight;
-
         $b24UserId = $spec['bitrix24_user_id'] ?? '';
         $hoursTasks = $b24UserId !== '' ? $this->getTaskHoursTotal($b24UserId, $dateFrom, $dateTo) : 0.0;
+        $hoursPlan = 0.0;
+        $hoursPlanRegular = 0.0;
+        $hoursPlanFlight = 0.0;
         $hoursTasksRegular = $hoursTasks;
         $hoursTasksFlight = 0.0;
 
-        $hoursFlight = round($hoursPlanFlight, 2);
-        $hoursRegular = round($hoursPlanRegular + $hoursTasks, 2);
-        $hoursTotal = round($hoursPlan + $hoursTasks, 2);
+        $hoursFlight = 0.0;
+        $hoursRegular = round($hoursTasks, 2);
+        $hoursTotal = round($hoursTasks, 2);
 
         $days = max(1, (strtotime($dateTo) - strtotime($dateFrom)) / 86400 + 1);
         $weeks = $days / 7;
@@ -153,33 +148,7 @@ final class LoadService
     }
 
     /**
-     * Часы по плановым записям специалиста за период, разбивка по work_type_id (1=regular, 2=flight).
-     * @return array{regular: float, flight: float}
-     */
-    private function getPlanHoursByType(int $specialistId, string $dateFrom, string $dateTo): array
-    {
-        $stmt = $this->pdo->prepare(
-            'SELECT work_type_id, COALESCE(SUM(hours), 0) as h FROM plan_entries
-             WHERE specialist_id = ? AND date_from <= ? AND date_to >= ?
-             GROUP BY work_type_id'
-        );
-        $stmt->execute([$specialistId, $dateTo, $dateFrom]);
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        $regular = 0.0;
-        $flight = 0.0;
-        foreach ($rows as $r) {
-            $h = (float) $r['h'];
-            if ((int) $r['work_type_id'] === 2) {
-                $flight += $h;
-            } else {
-                $regular += $h;
-            }
-        }
-        return ['regular' => $regular, 'flight' => $flight];
-    }
-
-    /**
-     * Суммарные часы по задачам B24 за период (без разбивки по типу работы).
+     * Суммарные часы по задачам B24 за период.
      */
     private function getTaskHoursTotal(string $bitrix24UserId, string $dateFrom, string $dateTo): float
     {

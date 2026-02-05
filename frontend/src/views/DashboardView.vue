@@ -83,7 +83,7 @@ onMounted(loadRefs)
 <template>
   <div class="page">
     <h1 class="page__title">Загрузка</h1>
-    <p class="page__desc">Расчёт загрузки за период: плановые записи + часы по задачам Bitrix24 (ответственный = специалист с указанным Bitrix24 User ID).</p>
+    <p class="page__desc">Расчёт загрузки за период по часам задач Bitrix24 (ответственный = специалист с указанным Bitrix24 User ID).</p>
 
     <p v-if="error" class="error">{{ error }}</p>
 

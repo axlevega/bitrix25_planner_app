@@ -61,13 +61,6 @@ export const api = {
     save: (data) => api.post('/integration-settings', data),
   },
   sync: (mode = 'full') => api.post('/sync', { mode }),
-  // Плановые записи и загрузка (фаза 2)
-  planEntries: {
-    list: (params) => api.get('/plan-entries', params),
-    create: (data) => api.post('/plan-entries', data),
-    update: (data) => api.put('/plan-entries', data),
-    delete: (id) => api.delete('/plan-entries', { id }),
-  },
   load: (params) => api.get('/load', params),
   // Сетка планирования: задачи + учёт времени по дням из B24
   planningGrid: (params) => api.get('/planning-grid', params),
