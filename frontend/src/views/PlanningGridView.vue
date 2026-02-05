@@ -101,6 +101,11 @@ function hoursForTaskDay(taskId, date) {
   return h === '0.0' ? '' : h
 }
 
+/** Количество подстрок по задаче: с перепланом 3 (Исх./Переплан/Факт), без — 2 (План/Факт). */
+function taskRowCount(task) {
+  return task.has_plan_override ? 3 : 2
+}
+
 function taskLink(task) {
   const base = (gridData.value && gridData.value.portal_url) ? gridData.value.portal_url.replace(/\/+$/, '') : ''
   if (!base || !task.responsible_user_id || !task.bitrix24_task_id) return null
@@ -113,19 +118,22 @@ function isWeekend(dateStr) {
   return day === 0 || day === 6
 }
 
+/** Общее плановое время задачи: в БД минуты → часы = / 60 */
 function planHours(task) {
   if (task.time_estimate == null) return '—'
   const v = Number(task.time_estimate)
-  const hours = v >= 10000 ? v / 3600 : v / 60
-  return hours.toFixed(1)
+  const hours = v / 60
+  const rounded = Math.round(hours * 10) / 10
+  return rounded % 1 === 0 ? String(Math.round(rounded)) : rounded.toFixed(1)
 }
 
-/** Плановые часы по дню (скорректированный план из API plan_hours_by_date) */
+/** Плановые часы по дню (скорректированный план из API plan_hours_by_date); в ячейке показываем с одним знаком. */
 function planHoursForTaskDay(task, date) {
   const byDate = task.plan_hours_by_date || {}
   const h = byDate[date]
   if (h == null || h === 0) return ''
-  return Number(h) === 0 ? '' : String(h)
+  const n = Number(h)
+  return n === 0 ? '' : (Math.round(n * 10) / 10).toFixed(1).replace(/\.0$/, '')
 }
 
 /** Исходные плановые часы по дню (original_plan_hours_by_date, только при переплане) */
@@ -133,10 +141,11 @@ function originalPlanHoursForTaskDay(task, date) {
   const byDate = task.original_plan_hours_by_date || {}
   const h = byDate[date]
   if (h == null || h === 0) return ''
-  return Number(h) === 0 ? '' : String(h)
+  const n = Number(h)
+  return n === 0 ? '' : (Math.round(n * 10) / 10).toFixed(1).replace(/\.0$/, '')
 }
 
-/** Сумма плановых часов за период по задаче (переплан или авто) */
+/** Сумма плановых часов за период по задаче (переплан или авто). Итог округляем до 2 знаков, чтобы 0.5 и 2.0 не превращались в 0.6 и 2.1 из‑за округления по дням. */
 function planHoursTotalInPeriod(task) {
   const byDate = task.plan_hours_by_date || {}
   const dayList = days.value || []
@@ -145,10 +154,12 @@ function planHoursTotalInPeriod(task) {
     const h = byDate[d]
     if (h != null) sum += Number(h)
   }
-  return sum > 0 ? sum.toFixed(1) : (planHours(task) !== '—' ? planHours(task) : '—')
+  if (sum <= 0) return planHours(task) !== '—' ? planHours(task) : '—'
+  const rounded = Math.round(sum * 100) / 100
+  return rounded.toFixed(rounded % 1 === 0 ? 0 : 1)
 }
 
-/** Сумма исходных плановых часов за период (только при переплане) */
+/** Сумма исходных плановых часов за период (только при переплане); итог округляем как в planHoursTotalInPeriod. */
 function originalPlanHoursTotalInPeriod(task) {
   const byDate = task.original_plan_hours_by_date || {}
   const dayList = days.value || []
@@ -157,14 +168,16 @@ function originalPlanHoursTotalInPeriod(task) {
     const h = byDate[d]
     if (h != null) sum += Number(h)
   }
-  return sum > 0 ? sum.toFixed(1) : '—'
+  if (sum <= 0) return '—'
+  const rounded = Math.round(sum * 100) / 100
+  return rounded.toFixed(rounded % 1 === 0 ? 0 : 1)
 }
 
-/** Фактические часы всего по задаче (time_spent в минутах) */
+/** Фактические часы по задаче: в БД минуты → часы = / 60 */
 function factHoursTotal(task) {
   if (task.time_spent == null) return '—'
   const v = Number(task.time_spent)
-  const hours = v >= 10000 ? v / 3600 : v / 60
+  const hours = v / 60
   return hours.toFixed(1)
 }
 
@@ -281,7 +294,7 @@ function originalHoursLabel(taskPlan) {
   if (!taskPlan?.original) return '—'
   const o = taskPlan.original
   const est = o.time_estimate
-  const h = est >= 10000 ? est / 3600 : est / 60
+  const h = Number(est) / 60
   return `${o.plan_start || '—'} … ${o.plan_end || '—'}, ${h.toFixed(1)} ч`
 }
 
@@ -388,39 +401,37 @@ onMounted(loadRefs)
           </thead>
           <tbody>
             <template v-for="t in filteredTasks" :key="t.bitrix24_task_id">
-              <!-- При переплане: подстрока «Исх. план» (светло-зелёный) -->
+              <!-- При переплане: подстрока «Исх. план» (светло-зелёный); объединённые ячейки Задача и Специалист -->
               <tr v-if="t.has_plan_override" class="row-original">
-                <td class="td-fixed td-task" :title="t.title">
+                <td :rowspan="taskRowCount(t)" class="td-fixed td-task" :title="t.title">
                   <a v-if="taskLink(t)" :href="taskLink(t)" target="_blank" rel="noopener noreferrer" class="task-link">{{ (t.title || '').slice(0, 40) }}{{ (t.title || '').length > 40 ? '…' : '' }}</a>
                   <span v-else>{{ (t.title || '').slice(0, 40) }}{{ (t.title || '').length > 40 ? '…' : '' }}</span>
-                  <span class="row-type row-type--original">Исх. план</span>
                 </td>
-                <td class="td-fixed td-spec">{{ specialistNameByB24Id[t.responsible_user_id] || t.responsible_user_id || '—' }}</td>
+                <td :rowspan="taskRowCount(t)" class="td-fixed td-spec">{{ specialistNameByB24Id[t.responsible_user_id] || t.responsible_user_id || '—' }}</td>
                 <td class="td-fixed td-hours">{{ originalPlanHoursTotalInPeriod(t) }}</td>
                 <td v-for="day in days" :key="day" class="td-day td-day--original" :class="{ 'td-day--weekend': isWeekend(day) }">{{ originalPlanHoursForTaskDay(t, day) }}</td>
               </tr>
-              <!-- Подстрока План / Переплан (светло-голубой) -->
+              <!-- Подстрока План / Переплан (светло-голубой); без переплана — здесь объединённые ячейки -->
               <tr class="row-plan">
-                <td class="td-fixed td-task" :title="t.title">
-                  <template v-if="!t.has_plan_override">
+                <template v-if="!t.has_plan_override">
+                  <td :rowspan="taskRowCount(t)" class="td-fixed td-task" :title="t.title">
                     <a v-if="taskLink(t)" :href="taskLink(t)" target="_blank" rel="noopener noreferrer" class="task-link">{{ (t.title || '').slice(0, 40) }}{{ (t.title || '').length > 40 ? '…' : '' }}</a>
                     <span v-else>{{ (t.title || '').slice(0, 40) }}{{ (t.title || '').length > 40 ? '…' : '' }}</span>
-                  </template>
-                  <span class="row-type" :class="t.has_plan_override ? 'row-type--replanned' : 'row-type--plan'">{{ t.has_plan_override ? 'Переплан' : 'План' }}</span>
-                  <button type="button" class="btn-replan" @click="openReplanModal(t)">Изменить план</button>
+                  </td>
+                  <td :rowspan="taskRowCount(t)" class="td-fixed td-spec">{{ specialistNameByB24Id[t.responsible_user_id] || t.responsible_user_id || '—' }}</td>
+                </template>
+                <td class="td-fixed td-hours">
+                  {{ planHours(t) }}
+                  <button type="button" class="btn-replan" title="Изменить план" @click="openReplanModal(t)" aria-label="Изменить план">
+                  <svg class="icon-pencil" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+                </button>
                 </td>
-                <td class="td-fixed td-spec">{{ specialistNameByB24Id[t.responsible_user_id] || t.responsible_user_id || '—' }}</td>
-                <td class="td-fixed td-hours">{{ planHoursTotalInPeriod(t) }}</td>
-                <td v-for="day in days" :key="day" class="td-day td-day--plan" :class="{ 'td-day--weekend': isWeekend(day) }">{{ planHoursForTaskDay(t, day) }}</td>
+                <td v-for="day in days" :key="day" class="td-day td-day--plan" :class="{ 'td-day--weekend': isWeekend(day), 'td-day--filled': planHoursForTaskDay(t, day) }">{{ planHoursForTaskDay(t, day) }}</td>
               </tr>
-              <!-- Подстрока Факт (светло-оранжевый) -->
+              <!-- Подстрока Факт (светло-оранжевый); ячейки Задача и Специалист объединены сверху -->
               <tr class="row-fact">
-                <td class="td-fixed td-task td-task-fact">
-                  <span class="row-type row-type--fact">Факт</span>
-                </td>
-                <td class="td-fixed td-spec">{{ specialistNameByB24Id[t.responsible_user_id] || t.responsible_user_id || '—' }}</td>
                 <td class="td-fixed td-hours">{{ factHoursTotal(t) }}</td>
-                <td v-for="day in days" :key="day" class="td-day td-day--fact" :class="{ 'td-day--weekend': isWeekend(day) }">{{ hoursForTaskDay(t.bitrix24_task_id, day) }}</td>
+                <td v-for="day in days" :key="day" class="td-day td-day--fact" :class="{ 'td-day--weekend': isWeekend(day), 'td-day--filled': hoursForTaskDay(t.bitrix24_task_id, day) }">{{ hoursForTaskDay(t.bitrix24_task_id, day) }}</td>
               </tr>
             </template>
           </tbody>
@@ -504,8 +515,8 @@ onMounted(loadRefs)
   border: 1px solid #e2e8f0;
   border-radius: 6px;
 }
-.grid-table { border-collapse: collapse; font-size: 0.85rem; min-width: 100%; }
-.grid-table th, .grid-table td { padding: 0.35rem 0.5rem; border: 1px solid #e2e8f0; text-align: left; white-space: nowrap; }
+.grid-table { border-collapse: collapse; font-size: 0.85rem; min-width: 100%; background: #fff; }
+.grid-table th, .grid-table td { padding: 0.35rem 0.5rem; border: 1px solid #e2e8f0; text-align: left; white-space: nowrap; background: #fff; }
 .grid-table th { background: #f8fafc; font-weight: 600; }
 .grid-table .th-day, .grid-table .td-day { text-align: center; min-width: 2.5rem; }
 
@@ -520,25 +531,21 @@ onMounted(loadRefs)
 .th-task, .td-task { left: 0; min-width: 200px; max-width: 200px; white-space: normal; }
 .th-spec, .td-spec { left: 200px; min-width: 120px; max-width: 120px; }
 .th-hours, .td-hours { left: 320px; min-width: 56px; max-width: 56px; }
+.grid-table .row-plan .td-hours { min-width: 8rem; max-width: none; white-space: normal; }
 
 .task-link { color: var(--color-primary); text-decoration: none; }
 .task-link:hover { text-decoration: underline; }
 .grid-table .td-day { color: #475569; }
-.grid-table .th-day--weekend { background: #f1f5f9; color: #64748b; }
 
-/* Заливка по типу строки: исходный план — зелёный, переплан — голубой, факт — оранжевый */
-.grid-table tr.row-original .td-fixed { background: #dcfce7; }
-.grid-table tr.row-original .td-day { background: #dcfce7; }
-.grid-table tr.row-original .td-day--weekend { background: #bbf7d0; }
-.grid-table tr.row-plan .td-fixed { background: #e0f2fe; }
-.grid-table tr.row-plan .td-day { background: #e0f2fe; }
-.grid-table tr.row-plan .td-day--weekend { background: #bae6fd; }
-.grid-table tr.row-fact .td-fixed { background: #ffedd5; }
-.grid-table tr.row-fact .td-day { background: #ffedd5; }
-.grid-table tr.row-fact .td-day--weekend { background: #fed7aa; }
-.grid-table tr.row-original .td-fixed + .td-day--weekend { box-shadow: -2px 0 0 0 #bbf7d0; }
-.grid-table tr.row-plan .td-fixed + .td-day--weekend { box-shadow: -2px 0 0 0 #bae6fd; }
-.grid-table tr.row-fact .td-fixed + .td-day--weekend { box-shadow: -2px 0 0 0 #fed7aa; }
+/* Выходные дни — серый фон */
+.grid-table .th-day--weekend { background: #f1f5f9; color: #64748b; }
+.grid-table .td-day--weekend { background: #f1f5f9 !important; }
+
+/* Заполненные плановые ячейки — голубой; заполненные фактические — оранжевый */
+.grid-table .row-plan .td-day--plan.td-day--filled { background: #e0f2fe; }
+.grid-table .row-plan .td-day--plan.td-day--filled.td-day--weekend { background: #bae6fd !important; }
+.grid-table .row-fact .td-day--fact.td-day--filled { background: #ffedd5; }
+.grid-table .row-fact .td-day--fact.td-day--filled.td-day--weekend { background: #fed7aa !important; }
 
 /* Подписи типа строки */
 .row-type { font-size: 0.75rem; margin-left: 0.35rem; }
@@ -546,8 +553,9 @@ onMounted(loadRefs)
 .row-type--plan, .row-type--replanned { color: #0369a1; }
 .row-type--fact { color: #c2410c; }
 .td-task-fact { padding-left: 1rem; }
-.btn-replan { margin-left: 0.5rem; padding: 0.2rem 0.4rem; font-size: 0.75rem; border: 1px solid #0ea5e9; border-radius: 4px; background: #e0f2fe; color: #0369a1; cursor: pointer; }
+.btn-replan { margin-left: 0.5rem; padding: 0.25rem; border: 1px solid #0ea5e9; border-radius: 4px; background: #e0f2fe; color: #0369a1; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
 .btn-replan:hover { background: #bae6fd; }
+.icon-pencil { display: block; }
 
 /* Модалка переплана */
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 1rem; }
