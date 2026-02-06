@@ -8,22 +8,22 @@ const routes = [
     meta: { title: 'Bitrix25 Planner' },
   },
   {
+    path: '/settings',
+    name: 'Settings',
+    component: () => import('../views/SettingsView.vue'),
+    meta: { title: 'Настройки' },
+  },
+  {
     path: '/departments',
-    name: 'Departments',
-    component: () => import('../views/DepartmentsView.vue'),
-    meta: { title: 'Отделы' },
+    redirect: () => ({ path: '/settings', query: { tab: 'departments' } }),
   },
   {
     path: '/specialists',
-    name: 'Specialists',
-    component: () => import('../views/SpecialistsView.vue'),
-    meta: { title: 'Специалисты' },
+    redirect: () => ({ path: '/settings', query: { tab: 'specialists' } }),
   },
   {
     path: '/integration-settings',
-    name: 'IntegrationSettings',
-    component: () => import('../views/IntegrationSettingsView.vue'),
-    meta: { title: 'Настройки интеграции' },
+    redirect: () => ({ path: '/settings', query: { tab: 'sync' } }),
   },
   {
     path: '/dashboard',
