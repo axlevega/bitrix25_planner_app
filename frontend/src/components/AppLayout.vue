@@ -5,12 +5,12 @@ import { RouterLink } from 'vue-router'
 <template>
   <div class="layout">
     <nav class="nav">
-      <RouterLink to="/" class="nav__link">Главная</RouterLink>
-      <RouterLink to="/departments" class="nav__link">Отделы</RouterLink>
-      <RouterLink to="/specialists" class="nav__link">Специалисты</RouterLink>
-      <RouterLink to="/integration-settings" class="nav__link">Настройки интеграции</RouterLink>
-      <RouterLink to="/planning-grid" class="nav__link">Планирование</RouterLink>
-      <RouterLink to="/dashboard" class="nav__link">Загрузка</RouterLink>
+      <div class="nav__main">
+        <RouterLink to="/" class="nav__link">Дашборд</RouterLink>
+        <RouterLink to="/planning-grid" class="nav__link">Планирование</RouterLink>
+        <RouterLink to="/dashboard" class="nav__link">Загрузка</RouterLink>
+      </div>
+      <RouterLink to="/settings" class="nav__link nav__link--settings">Настройки</RouterLink>
     </nav>
     <main class="main">
       <router-view />
@@ -26,11 +26,18 @@ import { RouterLink } from 'vue-router'
 }
 .nav {
   display: flex;
+  align-items: center;
+  justify-content: flex-end;
   gap: 0.5rem;
   padding: 0.75rem 1rem;
   background: #fff;
   border-bottom: 1px solid #e2e8f0;
   flex-wrap: wrap;
+}
+.nav__main {
+  display: flex;
+  gap: 0.5rem;
+  margin-right: auto;
 }
 .nav__link {
   color: var(--color-primary);
@@ -45,6 +52,11 @@ import { RouterLink } from 'vue-router'
     background: var(--color-primary);
     color: #fff;
   }
+}
+.nav__link--settings {
+  margin-left: 0.5rem;
+  border-left: 1px solid #e2e8f0;
+  padding-left: 0.75rem;
 }
 .main {
   flex: 1;

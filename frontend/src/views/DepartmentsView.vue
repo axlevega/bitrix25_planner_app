@@ -2,6 +2,8 @@
 import { ref, onMounted } from 'vue'
 import { api } from '../api/client'
 
+const { embedded } = defineProps({ embedded: { type: Boolean, default: false } })
+
 const items = ref([])
 const loading = ref(true)
 const error = ref(null)
@@ -61,8 +63,14 @@ onMounted(load)
 
 <template>
   <div class="page">
-    <h1 class="page__title">Отделы</h1>
-    <p class="page__desc">Справочник отделов приложения (SEO, разработка, дизайн и т.п.). Создаётся вручную — это не данные из Bitrix24. Сначала добавьте отделы, затем на вкладке «Специалисты» привяжите людей к отделам.</p>
+    <template v-if="!embedded">
+      <h1 class="page__title">Отделы</h1>
+      <p class="page__desc">Справочник отделов приложения (SEO, разработка, дизайн и т.п.). Создаётся вручную — это не данные из Bitrix24. Сначала добавьте отделы, затем на вкладке «Специалисты» привяжите людей к отделам.</p>
+    </template>
+    <template v-else>
+      <h2 class="page__title page__title--tab">Отделы</h2>
+      <p class="page__desc">Справочник отделов. Сначала добавьте отделы, затем на вкладке «Специалисты» привяжите людей к отделам.</p>
+    </template>
 
     <p v-if="error" class="error">{{ error }}</p>
 
@@ -112,6 +120,10 @@ onMounted(load)
 .page__title {
   margin: 0 0 0.25rem;
   font-size: 1.5rem;
+}
+.page__title--tab {
+  font-size: 1.2rem;
+  margin-bottom: 0.5rem;
 }
 .page__desc {
   margin: 0 0 1rem;

@@ -2,6 +2,8 @@
 import { ref, onMounted, computed } from 'vue'
 import { api } from '../api/client'
 
+const { embedded } = defineProps({ embedded: { type: Boolean, default: false } })
+
 const items = ref([])
 const departments = ref([])
 const loading = ref(true)
@@ -106,8 +108,14 @@ onMounted(load)
 
 <template>
   <div class="page">
-    <h1 class="page__title">Специалисты</h1>
-    <p class="page__desc">Справочник специалистов для планирования: отдел, нормы часов, лимиты по флайтам. Создаётся вручную. Укажите <strong>Bitrix24 User ID</strong> (из синхронизации), чтобы задачи из Bitrix24 учитывались по этому специалисту при расчёте загрузки.</p>
+    <template v-if="!embedded">
+      <h1 class="page__title">Специалисты</h1>
+      <p class="page__desc">Справочник специалистов для планирования: отдел, нормы часов, лимиты по флайтам. Создаётся вручную. Укажите <strong>Bitrix24 User ID</strong> (из синхронизации), чтобы задачи из Bitrix24 учитывались по этому специалисту при расчёте загрузки.</p>
+    </template>
+    <template v-else>
+      <h2 class="page__title page__title--tab">Специалисты</h2>
+      <p class="page__desc">Справочник специалистов: отдел, нормы часов, лимиты. Укажите Bitrix24 User ID для учёта задач при расчёте загрузки.</p>
+    </template>
 
     <p v-if="error" class="error">{{ error }}</p>
 
@@ -203,6 +211,10 @@ onMounted(load)
 .page__title {
   margin: 0 0 0.25rem;
   font-size: 1.5rem;
+}
+.page__title--tab {
+  font-size: 1.2rem;
+  margin-bottom: 0.5rem;
 }
 .page__desc {
   margin: 0 0 1rem;
