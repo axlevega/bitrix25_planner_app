@@ -45,6 +45,13 @@ const replanForm = ref({
   hoursByDate: {}, // date -> string (input value)
 })
 
+/** Черновики плана по задачам для редактирования в сетке: taskId -> { [date]: hours } */
+const draftPlanByTask = ref({})
+/** Сохранение черновиков в процессе */
+const applyPlanSaving = ref(false)
+/** Ошибка при сохранении */
+const applyPlanError = ref(null)
+
 /** По умолчанию: последние 60 дней и будущие 30 дней от сегодня */
 function defaultPeriod() {
   const now = new Date()
@@ -149,6 +156,26 @@ function isWeekend(dateStr) {
   return day === 0 || day === 6
 }
 
+/** Индексы дней периода, являющихся рабочими (не выходные) */
+function getWorkdayIndices() {
+  const dayList = days.value || []
+  return dayList.map((d, i) => (isWeekend(d) ? -1 : i)).filter((i) => i >= 0)
+}
+
+/** Ближайший рабочий день: для выходного — предыдущий (preferLeft) или следующий рабочий день */
+function snapToWorkday(dayIndex, preferLeft = true) {
+  const dayList = days.value || []
+  if (dayIndex < 0) return 0
+  if (dayIndex >= dayList.length) return dayList.length - 1
+  if (!isWeekend(dayList[dayIndex])) return dayIndex
+  if (preferLeft) {
+    for (let i = dayIndex - 1; i >= 0; i--) if (!isWeekend(dayList[i])) return i
+    return 0
+  }
+  for (let i = dayIndex + 1; i < dayList.length; i++) if (!isWeekend(dayList[i])) return i
+  return dayList.length - 1
+}
+
 /** Общее плановое время задачи. В БД time_estimate хранится в минутах → часы = / 60. Формат: целое (36, 102) или один знак (0.5). */
 function planHours(task) {
   if (task.time_estimate == null) return '—'
@@ -158,13 +185,71 @@ function planHours(task) {
   return rounded % 1 === 0 ? String(Math.round(rounded)) : rounded.toFixed(1)
 }
 
+/** Отображаемые плановые часы по задаче: черновик или данные с сервера */
+function getDisplayPlanHoursByDate(task) {
+  const taskId = String(task.bitrix24_task_id)
+  if (draftPlanByTask.value[taskId]) return draftPlanByTask.value[taskId]
+  return task.plan_hours_by_date || {}
+}
+
 /** Плановые часы по дню (скорректированный план из API plan_hours_by_date); в ячейке показываем с одним знаком. */
 function planHoursForTaskDay(task, date) {
-  const byDate = task.plan_hours_by_date || {}
+  const byDate = getDisplayPlanHoursByDate(task)
   const h = byDate[date]
   if (h == null || h === 0) return ''
   const n = Number(h)
   return n === 0 ? '' : (Math.round(n * 10) / 10).toFixed(1).replace(/\.0$/, '')
+}
+
+/** Начальный и конечный индекс дней с плановыми часами по задаче; null если нет часов */
+function planBarRange(task) {
+  const byDate = getDisplayPlanHoursByDate(task)
+  const dayList = days.value || []
+  let startIdx = -1
+  let endIdx = -1
+  for (let i = 0; i < dayList.length; i++) {
+    const h = byDate[dayList[i]]
+    if (h != null && Number(h) > 0) {
+      if (startIdx < 0) startIdx = i
+      endIdx = i
+    }
+  }
+  if (startIdx < 0) return null
+  return { startIndex: startIdx, endIndex: endIdx, startDate: dayList[startIdx], endDate: dayList[endIdx] }
+}
+
+/** Диапазон полосы по черновику задачи (для перетаскивания — текущая позиция из draft) */
+function planBarRangeFromDraft(taskId) {
+  const byDate = draftPlanByTask.value[taskId]
+  if (!byDate) return null
+  const dayList = days.value || []
+  let startIdx = -1
+  let endIdx = -1
+  for (let i = 0; i < dayList.length; i++) {
+    const h = byDate[dayList[i]]
+    if (h != null && Number(h) > 0) {
+      if (startIdx < 0) startIdx = i
+      endIdx = i
+    }
+  }
+  if (startIdx < 0) return null
+  return { startIndex: startIdx, endIndex: endIdx }
+}
+
+/** Часы по дням в диапазоне полосы (для отображения в полосе по каждому дню) */
+function planBarHoursByDayInRange(task) {
+  const range = planBarRange(task)
+  if (!range) return []
+  const byDate = getDisplayPlanHoursByDate(task)
+  const dayList = days.value || []
+  const result = []
+  for (let i = range.startIndex; i <= range.endIndex; i++) {
+    const date = dayList[i]
+    const h = byDate[date]
+    const hours = h != null && Number(h) > 0 ? Number(h) : 0
+    result.push({ date, hours, dayIndex: i })
+  }
+  return result
 }
 
 /** Исходные плановые часы по дню (original_plan_hours_by_date, только при переплане) */
@@ -176,9 +261,9 @@ function originalPlanHoursForTaskDay(task, date) {
   return n === 0 ? '' : (Math.round(n * 10) / 10).toFixed(1).replace(/\.0$/, '')
 }
 
-/** Сумма плановых часов за период по задаче (переплан или авто). Итог округляем до 2 знаков, чтобы 0.5 и 2.0 не превращались в 0.6 и 2.1 из‑за округления по дням. */
+/** Сумма плановых часов за период по задаче (переплан или авто). Итог округляем до 2 знаков. */
 function planHoursTotalInPeriod(task) {
-  const byDate = task.plan_hours_by_date || {}
+  const byDate = getDisplayPlanHoursByDate(task)
   const dayList = days.value || []
   let sum = 0
   for (const d of dayList) {
@@ -388,12 +473,204 @@ async function saveReplan() {
       plan_end_date: replanForm.value.plan_end_date || undefined,
       plan_hours_by_date: planHoursByDate,
     })
+    delete draftPlanByTask.value[String(replanTaskId.value)]
     closeReplanModal()
     await loadGrid()
   } catch (e) {
     taskPlanError.value = e.message
   } finally {
     taskPlanSaving.value = false
+  }
+}
+
+/** Ширина одной колонки дня в таймлайне (rem) */
+const DAY_CELL_WIDTH_REM = 2.5
+
+/** Состояние перетаскивания полосы плана */
+const planBarDragState = ref(null)
+/** Состояние изменения размера полосы (левая/правая граница) */
+const planBarResizeState = ref(null)
+
+function ensureDraftForTask(task) {
+  const taskId = String(task.bitrix24_task_id)
+  if (!draftPlanByTask.value[taskId]) {
+    const current = getDisplayPlanHoursByDate(task)
+    draftPlanByTask.value[taskId] = { ...current }
+  }
+  return String(task.bitrix24_task_id)
+}
+
+/**
+ * Позиционирование полосы по курсору: точка внутри полосы (offsetRatio 0..1) остаётся под курсором.
+ * Так не накапливается рассинхрон при перескоке через выходные.
+ */
+function applyMoveToDraftFromCursor(taskId, timelineEl, clientX, offsetInBarRatio) {
+  const range = planBarRangeFromDraft(taskId)
+  if (!range) return
+  const dayList = days.value || []
+  const len = dayList.length
+  const workdayIndices = getWorkdayIndices()
+  if (!timelineEl || len === 0 || workdayIndices.length === 0) return
+  const rect = timelineEl.getBoundingClientRect()
+  const dayWidthPx = rect.width / len
+  const barLen = range.endIndex - range.startIndex + 1
+  const barWidthPx = barLen * dayWidthPx
+  const cursorXInTimeline = clientX - rect.left
+  const barLeftPx = cursorXInTimeline - offsetInBarRatio * barWidthPx
+  const targetDayIndex = barLeftPx / dayWidthPx
+  const newStartDayIndex = Math.max(0, Math.min(targetDayIndex, len - barLen))
+  const newStartSnapped = snapToWorkday(Math.floor(newStartDayIndex), true)
+  let newStartBarWorkdayIdx = workdayIndices.findIndex((wd) => wd >= newStartSnapped)
+  if (newStartBarWorkdayIdx < 0) newStartBarWorkdayIdx = workdayIndices.length - 1
+  const current = { ...draftPlanByTask.value[taskId] }
+  const barWeekdayIndices = workdayIndices.filter((wd) => wd >= range.startIndex && wd <= range.endIndex)
+  if (barWeekdayIndices.length === 0) return
+  newStartBarWorkdayIdx = Math.max(0, Math.min(newStartBarWorkdayIdx, workdayIndices.length - barWeekdayIndices.length))
+  const hoursInOrder = barWeekdayIndices.map((wd) => {
+    const h = current[dayList[wd]]
+    return h != null ? Number(h) : 0
+  })
+  const newByDate = {}
+  for (let i = 0; i < barWeekdayIndices.length; i++) {
+    const newDayIndex = workdayIndices[newStartBarWorkdayIdx + i]
+    if (newDayIndex != null && !isWeekend(dayList[newDayIndex])) {
+      newByDate[dayList[newDayIndex]] = Math.round(hoursInOrder[i] * 10) / 10
+    }
+  }
+  draftPlanByTask.value[taskId] = newByDate
+}
+
+/** Обновить черновик плана: изменить границы; часы только на рабочие дни, перераспределение по рабочим дням нового диапазона */
+function applyResizeToDraft(taskId, range, newStartIndex, newEndIndex) {
+  const dayList = days.value || []
+  const workdayIndices = getWorkdayIndices()
+  if (workdayIndices.length === 0) return
+  const current = { ...draftPlanByTask.value[taskId] }
+  let totalHours = 0
+  for (let i = range.startIndex; i <= range.endIndex; i++) {
+    if (!isWeekend(dayList[i])) {
+      const h = current[dayList[i]]
+      if (h != null) totalHours += Number(h)
+    }
+  }
+  const newRangeWeekdays = workdayIndices.filter((wd) => wd >= newStartIndex && wd <= newEndIndex)
+  if (newRangeWeekdays.length <= 0) return
+  const hoursPerDay = totalHours / newRangeWeekdays.length
+  const newByDate = {}
+  for (const wd of newRangeWeekdays) {
+    newByDate[dayList[wd]] = Math.round(hoursPerDay * 10) / 10
+  }
+  draftPlanByTask.value[taskId] = newByDate
+}
+
+function onPlanBarMouseDown(task, event, edge) {
+  if (event.button !== 0) return
+  event.preventDefault()
+  const taskId = ensureDraftForTask(task)
+  const range = planBarRange(task)
+  if (!range) return
+  const timelineEl = event.target.closest('.timeline-wrap')
+  if (edge === 'move') {
+    const rect = timelineEl.getBoundingClientRect()
+    const len = days.value?.length || 1
+    const dayWidthPx = rect.width / len
+    const barLeftPx = (range.startIndex / len) * rect.width
+    const barWidthPx = ((range.endIndex - range.startIndex + 1) / len) * rect.width
+    const clickXInTimeline = event.clientX - rect.left
+    let offsetInBarRatio = barWidthPx > 0 ? (clickXInTimeline - barLeftPx) / barWidthPx : 0
+    offsetInBarRatio = Math.max(0, Math.min(1, offsetInBarRatio))
+    document.body.style.cursor = 'grabbing'
+    document.body.style.userSelect = 'none'
+    planBarDragState.value = {
+      taskId,
+      task,
+      timelineEl,
+      offsetInBarRatio,
+    }
+  } else {
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    planBarResizeState.value = {
+      taskId,
+      task,
+      timelineEl,
+      startRange: { startIndex: range.startIndex, endIndex: range.endIndex },
+      startClientX: event.clientX,
+      edge,
+    }
+  }
+}
+
+function onPlanBarDocumentMouseMove(event) {
+  const dayList = days.value || []
+  const len = dayList.length
+  if (planBarDragState.value) {
+    const { taskId, timelineEl, offsetInBarRatio } = planBarDragState.value
+    applyMoveToDraftFromCursor(taskId, timelineEl, event.clientX, offsetInBarRatio)
+  }
+  if (planBarResizeState.value) {
+    const { taskId, task, timelineEl, startRange, startClientX, edge } = planBarResizeState.value
+    const workdayIndicesResize = getWorkdayIndices()
+    if (!timelineEl || len === 0) return
+    const rect = timelineEl.getBoundingClientRect()
+    const dayWidth = rect.width / len
+    const cursorDayIndex = Math.floor((event.clientX - rect.left) / dayWidth)
+    const clamped = Math.max(0, Math.min(len - 1, cursorDayIndex))
+    const snapped = edge === 'left' ? snapToWorkday(clamped, true) : snapToWorkday(clamped, false)
+    let newStart = startRange.startIndex
+    let newEnd = startRange.endIndex
+    if (edge === 'left') {
+      newStart = Math.min(snapped, startRange.endIndex)
+      if (newEnd - newStart < 1) {
+        const idx = workdayIndicesResize.indexOf(newStart)
+        newEnd = workdayIndicesResize[idx + 1] ?? newEnd
+      }
+    } else {
+      newEnd = Math.max(snapped, startRange.startIndex)
+      if (newEnd - newStart < 1) {
+        const idx = workdayIndicesResize.indexOf(newEnd)
+        newStart = workdayIndicesResize[idx - 1] ?? newStart
+      }
+    }
+    newStart = snapToWorkday(newStart, true)
+    newEnd = snapToWorkday(newEnd, false)
+    if (newEnd < newStart) [newStart, newEnd] = [newEnd, newStart]
+    if (newStart !== startRange.startIndex || newEnd !== startRange.endIndex) {
+      applyResizeToDraft(taskId, startRange, newStart, newEnd)
+      planBarResizeState.value.startRange = { startIndex: newStart, endIndex: newEnd }
+    }
+  }
+}
+
+function onPlanBarDocumentMouseUp() {
+  if (planBarDragState.value || planBarResizeState.value) {
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }
+  planBarDragState.value = null
+  planBarResizeState.value = null
+}
+
+/** Есть ли несохранённые черновики */
+const hasDraftPlans = computed(() => Object.keys(draftPlanByTask.value).length > 0)
+
+async function applyDraftPlans() {
+  if (!hasDraftPlans.value) return
+  applyPlanSaving.value = true
+  applyPlanError.value = null
+  try {
+    for (const [taskId, planHoursByDate] of Object.entries(draftPlanByTask.value)) {
+      await api.taskPlan.save({
+        bitrix24_task_id: taskId,
+        plan_hours_by_date: planHoursByDate,
+      })
+    }
+    draftPlanByTask.value = {}
+    await loadGrid()
+  } catch (e) {
+    applyPlanError.value = e.message
+  } finally {
+    applyPlanSaving.value = false
   }
 }
 
@@ -413,10 +690,14 @@ onMounted(() => {
     if (aboveTableRef.value) resizeObserver.observe(aboveTableRef.value)
   })
   window.addEventListener('resize', updateTableHeight)
+  document.addEventListener('mousemove', onPlanBarDocumentMouseMove)
+  document.addEventListener('mouseup', onPlanBarDocumentMouseUp)
 })
 watch(() => gridData.value, () => nextTick(updateTableHeight), { flush: 'post' })
 onUnmounted(() => {
   window.removeEventListener('resize', updateTableHeight)
+  document.removeEventListener('mousemove', onPlanBarDocumentMouseMove)
+  document.removeEventListener('mouseup', onPlanBarDocumentMouseUp)
   if (resizeObserver && aboveTableRef.value) resizeObserver.unobserve(aboveTableRef.value)
   resizeObserver = null
 })
@@ -494,6 +775,13 @@ onUnmounted(() => {
       <template v-if="gridData && !gridData.error">
         <h2 class="grid-section__title">Задачи и учёт времени по дням</h2>
         <p class="muted grid-section__period">Период: {{ gridData.date_from }} — {{ gridData.date_to }}</p>
+        <p v-if="applyPlanError" class="error">{{ applyPlanError }}</p>
+        <p v-if="hasDraftPlans" class="draft-actions">
+          <button type="button" class="btn btn--primary" :disabled="applyPlanSaving" @click="applyDraftPlans">
+            {{ applyPlanSaving ? 'Сохранение…' : 'Применить изменения плана' }}
+          </button>
+          <span class="muted">Несохранённые правки плановых полос (сдвиг/растягивание) будут сохранены на сервер.</span>
+        </p>
       </template>
     </div>
 
@@ -518,12 +806,41 @@ onUnmounted(() => {
                 </td>
                 <td :rowspan="taskRowCount(t)" class="td-fixed td-spec">{{ specialistNameByB24Id[t.responsible_user_id] || t.responsible_user_id || '—' }}</td>
                 <td class="td-fixed td-hours">{{ t.has_plan_override ? 'Переплан: ' : 'План: ' }} 
-                  {{ planHours(t) }}
-                  <button type="button" class="btn-replan" title="Изменить план" @click="openReplanModal(t)" aria-label="Изменить план">
+                  {{ planHoursTotalInPeriod(t) }}
+                  <button type="button" class="btn-replan" title="Изменить план в модальном окне" @click="openReplanModal(t)" aria-label="Изменить план">
                   <svg class="icon-pencil" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
                 </button>
                 </td>
-                <td v-for="day in days" :key="day" class="td-day td-day--plan" :class="{ 'td-day--weekend': isWeekend(day), 'td-day--filled': planHoursForTaskDay(t, day) }">{{ planHoursForTaskDay(t, day) }}</td>
+                <td :colspan="days.length" class="td-timeline-cell">
+                  <div class="timeline-wrap" :style="{ width: (days.length * DAY_CELL_WIDTH_REM) + 'rem' }">
+                    <div v-for="day in days" :key="day" class="timeline-day" :class="{ 'timeline-day--weekend': isWeekend(day) }" :data-date="day">{{ planHoursForTaskDay(t, day) || '—' }}</div>
+                    <template v-if="planBarRange(t)">
+                      <div
+                        class="plan-bar"
+                        :class="{ 'plan-bar--replan': t.has_plan_override }"
+                        :style="{
+                          left: (100 * planBarRange(t).startIndex / days.length) + '%',
+                          width: (100 * (planBarRange(t).endIndex - planBarRange(t).startIndex + 1) / days.length) + '%'
+                        }"
+                        title="Тяните для сдвига, за края — для растягивания; двойной клик — редактирование в модалке"
+                        @mousedown="onPlanBarMouseDown(t, $event, 'move')"
+                        @dblclick="openReplanModal(t)"
+                      >
+                        <span class="plan-bar__resize plan-bar__resize--left" @mousedown.stop="onPlanBarMouseDown(t, $event, 'left')" @dblclick.stop></span>
+                        <span class="plan-bar__segments">
+                          <span
+                            v-for="seg in planBarHoursByDayInRange(t)"
+                            :key="seg.date"
+                            class="plan-bar__segment"
+                            :class="{ 'plan-bar__segment--weekend': isWeekend(seg.date) }"
+                            :title="seg.date + ': ' + (seg.hours ? seg.hours : '0') + ' ч'"
+                          >{{ seg.hours ? (seg.hours % 1 === 0 ? seg.hours : seg.hours.toFixed(1)) : '—' }}</span>
+                        </span>
+                        <span class="plan-bar__resize plan-bar__resize--right" @mousedown.stop="onPlanBarMouseDown(t, $event, 'right')" @dblclick.stop></span>
+                      </div>
+                    </template>
+                  </div>
+                </td>
               </tr>
               <!-- Подстрока Факт (светло-оранжевый); ячейки Задача и Специалист объединены сверху -->
               <tr class="row-fact">
@@ -623,6 +940,56 @@ onUnmounted(() => {
 .grid-table thead th { position: sticky; top: 0; z-index: 3; background: #f8fafc; box-shadow: 0 1px 0 0 #e2e8f0; }
 .grid-table thead th.th-fixed { z-index: 4; }
 .grid-table .th-day, .grid-table .td-day { text-align: center; min-width: 2.5rem; }
+
+/* Таймлайн плановой полосы (одна ячейка на всю строку плана) */
+.td-timeline-cell { padding: 0; vertical-align: top; overflow: visible; }
+.timeline-wrap {
+  position: relative;
+  display: flex;
+  min-height: 1.6rem;
+  background: #fff;
+}
+.timeline-day {
+  flex: 0 0 2.5rem;
+  min-width: 2.5rem;
+  text-align: center;
+  font-size: 0.75rem;
+  color: #64748b;
+  border-left: 1px solid #e2e8f0;
+  padding: 0.1rem 0.2rem;
+}
+.timeline-day--weekend { background: #f1f5f9; }
+.plan-bar {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  background: #7dd3fc;
+  border: 1px solid #0ea5e9;
+  border-radius: 4px;
+  cursor: move;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  user-select: none;
+}
+.plan-bar--replan { background: #fca5a5; border-color: #dc2626; }
+.plan-bar__segments { display: flex; flex: 1; min-width: 0; align-items: center; justify-content: stretch; pointer-events: none; }
+.plan-bar__segment { flex: 1; font-size: 0.65rem; font-weight: 600; color: #0c4a6e; text-align: center; overflow: hidden; white-space: nowrap; }
+.plan-bar__segment--weekend { color: #64748b; opacity: 0.85; }
+.plan-bar--replan .plan-bar__segment { color: #7f1d1d; }
+.plan-bar--replan .plan-bar__segment--weekend { color: #94a3b8; }
+.plan-bar__resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 1;
+}
+.plan-bar__resize--left { left: 0; }
+.plan-bar__resize--right { right: 0; }
+.draft-actions { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin: 0.5rem 0; }
 
 /* Фиксированные колонки (не скроллятся по горизонтали) */
 .th-fixed, .td-fixed {
