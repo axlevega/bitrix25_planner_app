@@ -704,7 +704,7 @@ final class Application
             return ['error' => 'specialist_id or department_id required'];
         });
 
-        // Ручной запуск синхронизации: один чанк за запрос; фронт вызывает в цикле пока has_more. mode: full|tasks|users
+        // Ручной запуск синхронизации: один чанк за запрос; фронт вызывает в цикле пока has_more. mode: full|tasks|users (всегда полная)
         $this->router->post('/sync', function (array $payload): array {
             set_time_limit(60);
             $pdo = Database::getConnection();
@@ -713,7 +713,7 @@ final class Application
             if (!in_array($mode, [SyncService::MODE_FULL, SyncService::MODE_GROUPS, SyncService::MODE_TASKS, SyncService::MODE_USERS], true)) {
                 $mode = SyncService::MODE_FULL;
             }
-            $result = $service->runChunk($mode);
+            $result = $service->runChunk($mode, false);
             return [
                 'success' => $result['success'],
                 'message' => $result['message'],
@@ -721,6 +721,47 @@ final class Application
                 'users_count' => $result['users_count'] ?? 0,
                 'elapsed_count' => $result['elapsed_count'] ?? 0,
                 'has_more' => $result['has_more'] ?? false,
+            ];
+        });
+
+        // CRON: синхронизация по интервалу (sync_interval_minutes). Защита: query key = CRON_SECRET из .env
+        $this->router->get('/cron/sync', function (array $payload): array {
+            $secret = $_ENV['CRON_SECRET'] ?? getenv('CRON_SECRET');
+            $key = trim((string) ($payload['key'] ?? ''));
+            if ($secret === '' || $secret === false || $key !== (string) $secret) {
+                return ['success' => false, 'message' => 'forbidden'];
+            }
+            set_time_limit(300);
+            $pdo = Database::getConnection();
+            $repo = new IntegrationSettingsRepository($pdo);
+            $intervalMinutes = (int) ($repo->getValue('sync_interval_minutes') ?: 30);
+            $lastSyncAt = $repo->getValue('last_sync_at');
+            $run = $lastSyncAt === null || $lastSyncAt === '';
+            if (!$run && ($ts = strtotime($lastSyncAt)) !== false) {
+                $run = time() - $ts >= $intervalMinutes * 60;
+            }
+            if (!$run) {
+                return ['success' => true, 'message' => 'skip', 'skipped' => true];
+            }
+            $service = new SyncService($pdo);
+            $totalTasks = 0;
+            $totalUsers = 0;
+            $totalElapsed = 0;
+            do {
+                $result = $service->runChunk(SyncService::MODE_FULL, true);
+                $totalTasks += $result['tasks_count'] ?? 0;
+                $totalUsers += $result['users_count'] ?? 0;
+                $totalElapsed += $result['elapsed_count'] ?? 0;
+                if (!($result['success'] ?? false)) {
+                    return ['success' => false, 'message' => $result['message'] ?? 'sync error'];
+                }
+            } while ($result['has_more'] ?? false);
+            return [
+                'success' => true,
+                'message' => 'ok',
+                'tasks_count' => $totalTasks,
+                'users_count' => $totalUsers,
+                'elapsed_count' => $totalElapsed,
             ];
         });
     }

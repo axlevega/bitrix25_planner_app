@@ -39,3 +39,4 @@
 - **019_drop_plan_entries_and_work_types.sql** — удаление таблиц plan_entries и work_types; загрузка считается только по задачам B24.
 - **020_planning_default_uf_filter.sql** — настройки фильтра по UF для планирования.
 - **021_task_plan_intervals.sql** — интервалы переплана с разрывами: date_from, date_to, hours_per_day, sort_order; одна задача — несколько интервалов.
+- **022_last_sync_started_and_incremental_state.sql** — ключи last_sync_started_at, sync_filter_since, sync_incremental_task_ids для инкрементальной синхронизации (только изменённые сущности) и CRON.
