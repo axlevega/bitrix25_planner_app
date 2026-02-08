@@ -1,6 +1,18 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { api } from '../api/client'
+import {
+  UiPageHeader,
+  UiAlert,
+  UiCard,
+  UiRadio,
+  UiSelect,
+  UiInput,
+  UiButton,
+  UiTable,
+  UiStatus,
+  UiMuted,
+} from '../components/ui'
 
 const specialists = ref([])
 const departments = ref([])
@@ -61,20 +73,12 @@ async function loadLoad() {
   }
 }
 
-const statusText = computed(() => {
-  if (!loadResult.value || loadResult.value.error) return ''
+const statusVariant = computed(() => {
+  if (!loadResult.value || loadResult.value.error) return 'normal'
   const s = loadResult.value.status
-  if (s === 'overload') return 'Перегруз'
-  if (s === 'underload') return 'Недогруз'
-  return 'Норма'
-})
-
-const statusClass = computed(() => {
-  if (!loadResult.value || loadResult.value.error) return ''
-  const s = loadResult.value.status
-  if (s === 'overload') return 'status--overload'
-  if (s === 'underload') return 'status--underload'
-  return 'status--normal'
+  if (s === 'overload') return 'overload'
+  if (s === 'underload') return 'underload'
+  return 'normal'
 })
 
 onMounted(loadRefs)
@@ -82,52 +86,50 @@ onMounted(loadRefs)
 
 <template>
   <div class="page">
-    <h1 class="page__title">Загрузка</h1>
-    <p class="page__desc">Расчёт загрузки за период по часам задач Bitrix24 (ответственный = специалист с указанным Bitrix24 User ID).</p>
+    <UiPageHeader
+      title="Загрузка"
+      description="Расчёт загрузки за период по часам задач Bitrix24 (ответственный = специалист с указанным Bitrix24 User ID)."
+    />
 
-    <p v-if="error" class="error">{{ error }}</p>
+    <UiAlert v-if="error" variant="error">{{ error }}</UiAlert>
 
-    <section class="filter-section">
-      <label>
-        <input v-model="loadType" type="radio" value="specialist" /> Специалист
-      </label>
-      <label>
-        <input v-model="loadType" type="radio" value="department" /> Отдел
-      </label>
-      <label v-if="loadType === 'specialist'">
-        <select v-model="specialistId" class="input">
+    <section class="dashboard-filter">
+      <UiRadio v-model="loadType" name="loadType" value="specialist">Специалист</UiRadio>
+      <UiRadio v-model="loadType" name="loadType" value="department">Отдел</UiRadio>
+      <label v-if="loadType === 'specialist'" class="dashboard-filter__label">
+        <UiSelect v-model="specialistId" style="min-width: 160px">
           <option value="">— выберите —</option>
           <option v-for="s in specialists" :key="s.id" :value="s.id">{{ s.name }}</option>
-        </select>
+        </UiSelect>
       </label>
-      <label v-else>
-        <select v-model="departmentId" class="input">
+      <label v-else class="dashboard-filter__label">
+        <UiSelect v-model="departmentId" style="min-width: 160px">
           <option value="">— выберите —</option>
           <option v-for="d in departments" :key="d.id" :value="d.id">{{ d.name }}</option>
-        </select>
+        </UiSelect>
       </label>
-      <label>С <input v-model="dateFrom" type="date" class="input" /></label>
-      <label>По <input v-model="dateTo" type="date" class="input" /></label>
-      <button type="button" class="btn btn--primary" :disabled="loading" @click="loadLoad">
+      <label class="dashboard-filter__label">С <UiInput v-model="dateFrom" type="date" /></label>
+      <label class="dashboard-filter__label">По <UiInput v-model="dateTo" type="date" /></label>
+      <UiButton variant="primary" :disabled="loading" @click="loadLoad">
         {{ loading ? 'Расчёт…' : 'Рассчитать' }}
-      </button>
+      </UiButton>
     </section>
 
-    <section v-if="loadResult && !loadResult.error" class="result-section">
-      <h2>Результат</h2>
+    <UiCard v-if="loadResult && !loadResult.error" tag="section" class="dashboard-result">
+      <h2 class="dashboard-result__title">Результат</h2>
       <p><strong>Период:</strong> {{ loadResult.date_from }} — {{ loadResult.date_to }}</p>
       <p v-if="loadResult.specialist_name"><strong>Специалист:</strong> {{ loadResult.specialist_name }}</p>
       <p v-if="loadResult.department_name"><strong>Отдел:</strong> {{ loadResult.department_name }}</p>
-      <p><strong>Часы (план):</strong> {{ loadResult.hours_plan }} <span class="muted">(регулярка {{ loadResult.hours_plan_regular ?? 0 }} / флайт {{ loadResult.hours_plan_flight ?? 0 }})</span></p>
-      <p><strong>Часы (задачи B24):</strong> {{ loadResult.hours_tasks }} <span class="muted">(регулярка {{ loadResult.hours_tasks_regular ?? 0 }} / флайт {{ loadResult.hours_tasks_flight ?? 0 }})</span></p>
-      <p><strong>Всего часов:</strong> {{ loadResult.hours_total }} <span class="muted">(регулярка {{ loadResult.hours_regular ?? 0 }} / флайт {{ loadResult.hours_flight ?? 0 }})</span></p>
+      <p><strong>Часы (план):</strong> {{ loadResult.hours_plan }} <UiMuted>(регулярка {{ loadResult.hours_plan_regular ?? 0 }} / флайт {{ loadResult.hours_plan_flight ?? 0 }})</UiMuted></p>
+      <p><strong>Часы (задачи B24):</strong> {{ loadResult.hours_tasks }} <UiMuted>(регулярка {{ loadResult.hours_tasks_regular ?? 0 }} / флайт {{ loadResult.hours_tasks_flight ?? 0 }})</UiMuted></p>
+      <p><strong>Всего часов:</strong> {{ loadResult.hours_total }} <UiMuted>(регулярка {{ loadResult.hours_regular ?? 0 }} / флайт {{ loadResult.hours_flight ?? 0 }})</UiMuted></p>
       <p v-if="loadResult.norm_hours != null"><strong>Норма за период:</strong> {{ loadResult.norm_hours }}</p>
       <p v-if="loadResult.flight_limit != null"><strong>Лимит флайт за период:</strong> {{ loadResult.flight_limit }} ч</p>
-      <p v-if="loadResult.flight_limit_exceeded" class="status status--overload"><strong>Превышен лимит часов по флайтам</strong></p>
-      <p :class="['status', statusClass]"><strong>Статус загрузки:</strong> {{ statusText }}</p>
-      <div v-if="loadResult.specialists && loadResult.specialists.length" class="specialists-list">
-        <h3>По специалистам отдела</h3>
-        <table class="table">
+      <p v-if="loadResult.flight_limit_exceeded"><strong><UiStatus variant="overload">Превышен лимит часов по флайтам</UiStatus></strong></p>
+      <p><strong>Статус загрузки:</strong> <UiStatus :variant="statusVariant" /></p>
+      <div v-if="loadResult.specialists && loadResult.specialists.length" class="dashboard-result__table-wrap">
+        <h3 class="dashboard-result__subtitle">По специалистам отдела</h3>
+        <UiTable>
           <thead>
             <tr>
               <th>Специалист</th>
@@ -150,40 +152,56 @@ onMounted(loadRefs)
               <td>
                 <span v-if="s.flight_limit != null">{{ s.flight_limit }}</span>
                 <span v-else>—</span>
-                <span v-if="s.flight_limit_exceeded" class="status status--overload" title="Превышен лимит флайтов"> ⚠</span>
+                <UiStatus v-if="s.flight_limit_exceeded" variant="overload" title="Превышен лимит флайтов"> ⚠</UiStatus>
               </td>
               <td>{{ s.norm_hours ?? '—' }}</td>
-              <td :class="['status', s.status === 'overload' ? 'status--overload' : s.status === 'underload' ? 'status--underload' : 'status--normal']">
-                {{ s.status === 'overload' ? 'Перегруз' : s.status === 'underload' ? 'Недогруз' : 'Норма' }}
+              <td>
+                <UiStatus :variant="s.status === 'overload' ? 'overload' : s.status === 'underload' ? 'underload' : 'normal'" />
               </td>
             </tr>
           </tbody>
-        </table>
+        </UiTable>
       </div>
-    </section>
+    </UiCard>
   </div>
 </template>
 
 <style lang="scss" scoped>
-.page__title { margin: 0 0 0.25rem; font-size: 1.5rem; }
-.page__desc { margin: 0 0 1rem; color: #64748b; font-size: 0.9rem; }
-.muted { color: #94a3b8; font-size: 0.85rem; }
-.error { color: var(--color-error); margin-bottom: 1rem; }
-.filter-section { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; margin-bottom: 1.5rem; }
-.filter-section label { display: flex; align-items: center; gap: 0.35rem; font-size: 0.9rem; }
-.input { padding: 0.4rem 0.6rem; border: 1px solid #cbd5e1; border-radius: 4px; }
-.btn { padding: 0.4rem 0.75rem; border: 1px solid #cbd5e1; border-radius: 4px; background: #fff; cursor: pointer; font-size: 0.9rem; }
-.btn--primary { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
-.btn:disabled { opacity: 0.7; cursor: not-allowed; }
-.result-section { background: #fff; padding: 1rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
-.result-section h2 { margin: 0 0 0.75rem; font-size: 1.1rem; }
-.result-section p { margin: 0.35rem 0; }
-.status--normal { color: #276749; }
-.status--overload { color: #c53030; }
-.status--underload { color: #744210; }
-.specialists-list { margin-top: 1rem; }
-.specialists-list h3 { margin: 0 0 0.5rem; font-size: 1rem; }
-.table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; font-size: 0.9rem; }
-.table th, .table td { padding: 0.4rem 0.6rem; text-align: left; border-bottom: 1px solid #e2e8f0; }
-.table th { background: #f8fafc; font-weight: 600; }
+.dashboard-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+.dashboard-filter__label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+}
+.dashboard-result__title {
+  margin: 0 0 0.75rem;
+  font-size: 1.1rem;
+}
+.dashboard-result p {
+  margin: 0.35rem 0;
+}
+.dashboard-result__table-wrap {
+  margin-top: 1rem;
+}
+.dashboard-result__subtitle {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+.dashboard-result__table-wrap .ui-table-wrap {
+  margin-top: 0.5rem;
+}
+.dashboard-result__table-wrap :deep(.ui-table) {
+  font-size: 0.9rem;
+}
+.dashboard-result__table-wrap :deep(th),
+.dashboard-result__table-wrap :deep(td) {
+  padding: 0.4rem 0.6rem;
+}
 </style>
