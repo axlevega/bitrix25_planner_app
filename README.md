@@ -35,6 +35,12 @@
 2. В корне: `npm install`, затем `npm run deploy`.  
    Собирается фронт и по FTP загружаются backend (без vendor и .env) и frontend/dist. Данные БД на сервере хранить в `.env` или в `backend/.env` / `backend/.env.local` (эти файлы не участвуют в деплое и не попадают в git). Подробнее — `docs/DEPLOY.md`.
 
+### Документация и планы
+
+- **PLANING.md** — техническое задание, видение продукта, текущее состояние и план дальнейших работ.
+- **CHECKLIST.md** — чеклист реализации по фазам (отмечать выполненное).
+- **backend/migrations/README.md** — список миграций БД и порядок применения.
+
 ### Доступ
 
 - Защита по .htpasswd: см. `docs/htpasswd-setup.md` и `docs/ACCESS.md`.

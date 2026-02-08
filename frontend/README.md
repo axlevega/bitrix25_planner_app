@@ -1,5 +1,31 @@
-# Vue 3 + Vite
+# Frontend — Bitrix25 Planner
 
-This template should help get you started developing with Vue 3 in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+Vue 3 + Vite, Vue Router, Pinia, SCSS. Сборка для разработки и продакшена.
 
-Learn more about IDE Support for Vue in the [Vue Docs Scaling up Guide](https://vuejs.org/guide/scaling-up/tooling.html#ide-support).
+## Запуск
+
+```bash
+npm install
+npm run dev
+```
+
+Для работы с API задайте в `frontend/.env` (из `.env.example`):
+
+- `VITE_API_BASE_URL` — URL бэкенда (например `https://ваш-домен.ru/api` или пусто для относительного `/api`)
+
+## Сборка
+
+```bash
+npm run build
+```
+
+Артефакты в `dist/`. При деплое через корневой `npm run deploy` сборка выполняется автоматически.
+
+## Структура
+
+- `src/views/` — страницы: Home, Настройки (Отделы, Специалисты, Синхронизация, Фильтры), Планирование (сетка), Загрузка
+- `src/components/` — общие компоненты и UI-кит
+- `src/api/client.js` — клиент запросов к backend API
+- `src/router/`, `src/stores/` — роутинг и состояние
+
+Подробнее о проекте — корневой `README.md` и `docs/DEPLOY.md`.
