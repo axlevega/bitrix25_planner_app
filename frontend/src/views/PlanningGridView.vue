@@ -14,6 +14,7 @@ import {
   UiModal,
   UiMuted,
 } from '../components/ui'
+import FilterDropdown from '../components/FilterDropdown.vue'
 
 const specialists = ref([])
 const departments = ref([])
@@ -46,6 +47,22 @@ const groupOptions = computed(() =>
     value: g.bitrix24_group_id,
     label: g.name || String(g.bitrix24_group_id),
   }))
+)
+
+/** Активность фильтров для индикатора на кнопках dropdown */
+const periodFilterActive = computed(() => !!(dateFrom.value && dateTo.value))
+const employeesFilterActive = computed(() =>
+  scopeType.value === 'specialist'
+    ? Array.isArray(specialistIds.value) && specialistIds.value.length > 0
+    : !!departmentId.value
+)
+const groupsFilterActive = computed(() => {
+  const total = taskGroups.value?.length ?? 0
+  const selected = selectedGroupIds.value?.length ?? 0
+  return total > 0 && selected > 0 && selected < total
+})
+const extraFilterActive = computed(
+  () => !hideTasksWithoutPlan.value || (!!filterUfFieldCode.value && filterUfValue.value !== '')
 )
 
 /** Ref контейнера скролла таблицы (для автоскролла до первого заполненного дня) */
@@ -738,59 +755,82 @@ onUnmounted(() => {
       <UiAlert v-if="error" variant="error">{{ error }}</UiAlert>
 
       <section class="planning-filter">
-        <UiRadio v-model="scopeType" name="scopeType" value="specialist">Специалисты</UiRadio>
-        <UiRadio v-model="scopeType" name="scopeType" value="department">Отдел</UiRadio>
-        <template v-if="scopeType === 'specialist'">
-          <label class="planning-filter__multi">
-            <span>Специалисты:</span>
-            <UiMultiSelect
-              v-model="specialistIds"
-              :options="specialistOptions"
-              placeholder="Поиск и выбор…"
-              style="min-width: 200px"
-            />
-          </label>
-        </template>
-        <label v-else class="planning-filter__label">
-          <UiSelect v-model="departmentId" style="min-width: 140px">
-            <option value="">— отдел —</option>
-            <option v-for="d in departments" :key="d.id" :value="d.id">{{ d.name }}</option>
-          </UiSelect>
-        </label>
-        <label class="planning-filter__label">С <UiInput v-model="dateFrom" type="date" /></label>
-        <label class="planning-filter__label">По <UiInput v-model="dateTo" type="date" /></label>
-        <template v-if="groupOptions.length">
-          <label class="planning-filter__multi">
-            <span>Группы (проекты):</span>
-            <UiMultiSelect
-              v-model="selectedGroupIds"
-              :options="groupOptions"
-              placeholder="Поиск и выбор…"
-              style="min-width: 200px"
-            />
-          </label>
-        </template>
-        <UiCheckbox v-model="hideTasksWithoutPlan" class="planning-filter__checkbox">Скрыть задачи без планового времени</UiCheckbox>
-        <template v-if="taskUfCatalog.length">
-          <label class="planning-filter__label">
-            <span>Фильтр по полю</span>
-            <UiSelect v-model="filterUfFieldCode" style="min-width: 160px">
-              <option value="">— не фильтровать —</option>
-              <option v-for="f in taskUfCatalog" :key="f.field_code" :value="f.field_code">
-                {{ f.label || f.field_code }}
-              </option>
-            </UiSelect>
-          </label>
-          <label v-if="filterUfFieldCode" class="planning-filter__label">
-            <span>Значение</span>
-            <UiSelect v-model="filterUfValue" style="min-width: 120px">
-              <option value="">— любое —</option>
-              <option value="1">да (1)</option>
-              <option value="0">нет (0)</option>
-            </UiSelect>
-          </label>
-        </template>
-        <UiButton variant="primary" :disabled="loading" @click="loadGrid">
+        <div class="planning-filter__dropdowns">
+          <FilterDropdown label="Период" :active="periodFilterActive">
+            <div class="planning-filter-panel">
+              <label class="planning-filter-panel__row">
+                <span class="planning-filter-panel__label">С</span>
+                <UiInput v-model="dateFrom" type="date" />
+              </label>
+              <label class="planning-filter-panel__row">
+                <span class="planning-filter-panel__label">По</span>
+                <UiInput v-model="dateTo" type="date" />
+              </label>
+            </div>
+          </FilterDropdown>
+          <FilterDropdown label="Сотрудники" :active="employeesFilterActive">
+            <div class="planning-filter-panel">
+              <div class="planning-filter-panel__row planning-filter-panel__row--radio">
+                <UiRadio v-model="scopeType" name="scopeType" value="specialist">Специалисты</UiRadio>
+                <UiRadio v-model="scopeType" name="scopeType" value="department">Отдел</UiRadio>
+              </div>
+              <template v-if="scopeType === 'specialist'">
+                <div class="planning-filter-panel__row">
+                  <UiMultiSelect
+                    v-model="specialistIds"
+                    :options="specialistOptions"
+                    placeholder="Поиск и выбор…"
+                    style="width: 100%; min-width: 200px"
+                  />
+                </div>
+              </template>
+              <div v-else class="planning-filter-panel__row">
+                <UiSelect v-model="departmentId" style="width: 100%; min-width: 180px">
+                  <option value="">— отдел —</option>
+                  <option v-for="d in departments" :key="d.id" :value="d.id">{{ d.name }}</option>
+                </UiSelect>
+              </div>
+            </div>
+          </FilterDropdown>
+          <FilterDropdown v-if="groupOptions.length" label="Группы (проекты)" :active="groupsFilterActive">
+            <div class="planning-filter-panel">
+              <UiMultiSelect
+                v-model="selectedGroupIds"
+                :options="groupOptions"
+                placeholder="Поиск и выбор…"
+                style="width: 100%; min-width: 200px"
+              />
+              <UiMuted tag="p" class="planning-filter-panel__hint">Пусто — все группы</UiMuted>
+            </div>
+          </FilterDropdown>
+          <FilterDropdown label="Дополнительно" :active="extraFilterActive">
+            <div class="planning-filter-panel">
+              <UiCheckbox v-model="hideTasksWithoutPlan" class="planning-filter-panel__checkbox">
+                Скрыть задачи без планового времени
+              </UiCheckbox>
+              <template v-if="taskUfCatalog.length">
+                <label class="planning-filter-panel__row">
+                  <span class="planning-filter-panel__label">Фильтр по полю</span>
+                  <UiSelect v-model="filterUfFieldCode" style="width: 100%">
+                    <option value="">— не фильтровать —</option>
+                    <option v-for="f in taskUfCatalog" :key="f.field_code" :value="f.field_code">
+                      {{ f.label || f.field_code }}
+                    </option>
+                  </UiSelect>
+                </label>
+                <label v-if="filterUfFieldCode" class="planning-filter-panel__row">
+                  <span class="planning-filter-panel__label">Значение</span>
+                  <UiSelect v-model="filterUfValue" style="width: 100%">
+                    <option value="">— любое —</option>
+                    <option value="1">да (1)</option>
+                    <option value="0">нет (0)</option>
+                  </UiSelect>
+                </label>
+              </template>
+            </div>
+          </FilterDropdown>
+        </div>
+        <UiButton variant="primary" :disabled="loading" class="planning-filter__submit" @click="loadGrid">
           {{ loading ? 'Загрузка…' : 'Показать сетку' }}
         </UiButton>
       </section>
@@ -931,25 +971,46 @@ onUnmounted(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem;
-  align-items: flex-start;
+  align-items: center;
   margin-bottom: 1.5rem;
 }
-.planning-filter__label {
+.planning-filter__dropdowns {
   display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
   align-items: center;
-  gap: 0.35rem;
-  font-size: 0.9rem;
 }
-.planning-filter__multi {
+.planning-filter__submit {
+  flex-shrink: 0;
+}
+
+/* Содержимое панелей фильтров в dropdown */
+.planning-filter-panel {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 0.25rem;
+  gap: 0.6rem;
   font-size: 0.9rem;
 }
-.planning-filter__checkbox {
-  white-space: nowrap;
-  align-self: center;
+.planning-filter-panel__row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.planning-filter-panel__row--radio {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.planning-filter-panel__label {
+  font-weight: 500;
+  color: #475569;
+}
+.planning-filter-panel__checkbox {
+  white-space: normal;
+}
+.planning-filter-panel__hint {
+  margin: 0;
+  font-size: 0.8rem;
 }
 .planning-above-table { margin-bottom: 0; }
 .planning-above-table .grid-section__title { margin: 1rem 0 0.25rem; font-size: 1.1rem; }
