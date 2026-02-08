@@ -8,7 +8,7 @@ import { RouterLink } from 'vue-router'
       <div class="nav__main">
         <RouterLink to="/" class="nav__link">Дашборд</RouterLink>
         <RouterLink to="/planning-grid" class="nav__link">Планирование</RouterLink>
-        <RouterLink to="/dashboard" class="nav__link">Загрузка</RouterLink>
+        <RouterLink to="/dashboard" class="nav__link">Нагрузка</RouterLink>
       </div>
       <RouterLink to="/ui-showcase" class="nav__link nav__link--right">UI Showcase</RouterLink>
       <RouterLink to="/settings" class="nav__link nav__link--settings">Настройки</RouterLink>

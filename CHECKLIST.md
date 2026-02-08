@@ -212,7 +212,7 @@
 - [x] Сверка с PLANING.md, актуализация раздела 5.2 (только задачи + elapsed, без сделок), раздел 12 «Текущее состояние», раздел 13 «План дальнейших работ»
 - [x] Удаление неиспользуемого: компонент HelloWorld.vue (нигде не импортировался)
 - [x] Отладочные эндпоинты GET /debug-elapsed, GET /debug-db оставлены для разработки (помечены в коде)
-- **Используемые сущности:** таблицы из миграций 001–021 (в т.ч. task_plan_intervals); plan_entries и work_types удалены в 019. Разделы фронта: Home, Настройки (Отделы, Специалисты, Синхронизация, Фильтры), Планирование (сетка), Загрузка. API: departments, specialists, integration-settings, planning-grid, task-plan, task-groups, task-uf-catalog, load, sync
+- **Используемые сущности:** таблицы из миграций 001–021 (в т.ч. task_plan_intervals); plan_entries и work_types удалены в 019. Разделы фронта: Home, Настройки (Отделы, Специалисты, Синхронизация, Фильтры), Планирование (сетка), Нагрузка. API: departments, specialists, integration-settings, planning-grid, task-plan, task-groups, task-uf-catalog, load, sync
 
 ---
 

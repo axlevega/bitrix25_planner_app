@@ -29,7 +29,7 @@ const routes = [
     path: '/dashboard',
     name: 'Dashboard',
     component: () => import('../views/DashboardView.vue'),
-    meta: { title: 'Загрузка' },
+    meta: { title: 'Нагрузка' },
   },
   {
     path: '/planning-grid',

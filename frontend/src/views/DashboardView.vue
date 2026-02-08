@@ -11,7 +11,6 @@ import {
   UiButton,
   UiTable,
   UiStatus,
-  UiMuted,
 } from '../components/ui'
 
 const specialists = ref([])
@@ -25,24 +24,36 @@ const loadResult = ref(null)
 const loading = ref(false)
 const error = ref(null)
 
+/** По умолчанию: последние 60 дней и будущие 30 дней от сегодня (как в планировании) */
 function defaultPeriod() {
   const now = new Date()
-  const monday = new Date(now)
-  const d = now.getDay()
-  const diff = d === 0 ? -6 : 1 - d
-  monday.setDate(now.getDate() + diff)
-  const sunday = new Date(monday)
-  sunday.setDate(monday.getDate() + 6)
-  dateFrom.value = monday.toISOString().slice(0, 10)
-  dateTo.value = sunday.toISOString().slice(0, 10)
+  const start = new Date(now)
+  start.setDate(start.getDate() - 60)
+  const end = new Date(now)
+  end.setDate(end.getDate() + 30)
+  dateFrom.value = start.toISOString().slice(0, 10)
+  dateTo.value = end.toISOString().slice(0, 10)
 }
 
 async function loadRefs() {
   try {
-    const [specRes, depRes] = await Promise.all([api.specialists.list(), api.departments.list()])
+    const [specRes, depRes, settingsRes] = await Promise.all([
+      api.specialists.list(),
+      api.departments.list(),
+      api.integrationSettings.get().catch(() => ({})),
+    ])
     specialists.value = specRes.items || []
     departments.value = depRes.items || []
     if (!dateFrom.value || !dateTo.value) defaultPeriod()
+    const defaultDepId = settingsRes.planning_default_department_id
+    if (defaultDepId && departments.value.some((d) => Number(d.id) === Number(defaultDepId))) {
+      loadType.value = 'department'
+      departmentId.value = defaultDepId
+    } else {
+      loadType.value = 'specialist'
+      specialistId.value = ''
+      departmentId.value = ''
+    }
   } catch (e) {
     error.value = e.message
   }
@@ -87,8 +98,8 @@ onMounted(loadRefs)
 <template>
   <div class="page">
     <UiPageHeader
-      title="Загрузка"
-      description="Расчёт загрузки за период по часам задач Bitrix24 (ответственный = специалист с указанным Bitrix24 User ID)."
+      title="Нагрузка"
+      description="Расчёт нагрузки за период по часам задач Bitrix24 (ответственный = специалист с указанным Bitrix24 User ID)."
     />
 
     <UiAlert v-if="error" variant="error">{{ error }}</UiAlert>
@@ -120,12 +131,9 @@ onMounted(loadRefs)
       <p><strong>Период:</strong> {{ loadResult.date_from }} — {{ loadResult.date_to }}</p>
       <p v-if="loadResult.specialist_name"><strong>Специалист:</strong> {{ loadResult.specialist_name }}</p>
       <p v-if="loadResult.department_name"><strong>Отдел:</strong> {{ loadResult.department_name }}</p>
-      <p><strong>Часы (план):</strong> {{ loadResult.hours_plan }} <UiMuted>(регулярка {{ loadResult.hours_plan_regular ?? 0 }} / флайт {{ loadResult.hours_plan_flight ?? 0 }})</UiMuted></p>
-      <p><strong>Часы (задачи B24):</strong> {{ loadResult.hours_tasks }} <UiMuted>(регулярка {{ loadResult.hours_tasks_regular ?? 0 }} / флайт {{ loadResult.hours_tasks_flight ?? 0 }})</UiMuted></p>
-      <p><strong>Всего часов:</strong> {{ loadResult.hours_total }} <UiMuted>(регулярка {{ loadResult.hours_regular ?? 0 }} / флайт {{ loadResult.hours_flight ?? 0 }})</UiMuted></p>
+      <p><strong>Запланировано:</strong> {{ loadResult.hours_plan }} <span class="dashboard-result__hint">— план нагрузки из Битрикс, при переплане учитывается переплан</span></p>
+      <p><strong>Выработано:</strong> {{ loadResult.hours_tasks }} <span class="dashboard-result__hint">— факт</span></p>
       <p v-if="loadResult.norm_hours != null"><strong>Норма за период:</strong> {{ loadResult.norm_hours }}</p>
-      <p v-if="loadResult.flight_limit != null"><strong>Лимит флайт за период:</strong> {{ loadResult.flight_limit }} ч</p>
-      <p v-if="loadResult.flight_limit_exceeded"><strong><UiStatus variant="overload">Превышен лимит часов по флайтам</UiStatus></strong></p>
       <p><strong>Статус загрузки:</strong> <UiStatus :variant="statusVariant" /></p>
       <div v-if="loadResult.specialists && loadResult.specialists.length" class="dashboard-result__table-wrap">
         <h3 class="dashboard-result__subtitle">По специалистам отдела</h3>
@@ -133,11 +141,8 @@ onMounted(loadRefs)
           <thead>
             <tr>
               <th>Специалист</th>
-              <th>План</th>
-              <th>Задачи</th>
-              <th>Регулярка</th>
-              <th>Флайт</th>
-              <th>Лимит флайт</th>
+              <th>Запланировано</th>
+              <th>Выработано</th>
               <th>Норма</th>
               <th>Статус</th>
             </tr>
@@ -147,13 +152,6 @@ onMounted(loadRefs)
               <td>{{ s.specialist_name }}</td>
               <td>{{ s.hours_plan }}</td>
               <td>{{ s.hours_tasks }}</td>
-              <td>{{ s.hours_regular ?? '—' }}</td>
-              <td>{{ s.hours_flight ?? '—' }}</td>
-              <td>
-                <span v-if="s.flight_limit != null">{{ s.flight_limit }}</span>
-                <span v-else>—</span>
-                <UiStatus v-if="s.flight_limit_exceeded" variant="overload" title="Превышен лимит флайтов"> ⚠</UiStatus>
-              </td>
               <td>{{ s.norm_hours ?? '—' }}</td>
               <td>
                 <UiStatus :variant="s.status === 'overload' ? 'overload' : s.status === 'underload' ? 'underload' : 'normal'" />
@@ -186,6 +184,10 @@ onMounted(loadRefs)
 }
 .dashboard-result p {
   margin: 0.35rem 0;
+}
+.dashboard-result__hint {
+  font-size: 0.85em;
+  color: var(--color-muted, #64748b);
 }
 .dashboard-result__table-wrap {
   margin-top: 1rem;
