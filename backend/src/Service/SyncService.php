@@ -12,12 +12,15 @@ use PDO;
  * Постранично: задачи → пользователи → elapsed по задачам (task.elapseditem.getlist).
  * phase: 0=groups, 1=tasks, 2=users, 3=elapsed, 4=idle.
  * Режимы: full (всё подряд), groups (только группы), tasks (только задачи + elapsed), users (только пользователи).
+ * Инкрементальный режим ($incremental): только сущности, изменённые после last_sync_started_at/last_sync_at.
  */
 final class SyncService
 {
     private const TASKS_DAYS_BACK_DEFAULT = 365;
     private const PAGE_SIZE = 50;
     private const ELAPSED_TASKS_PER_CHUNK = 10;
+    /** Если last_sync_at старше этого количества дней, инкремент не применяем — делаем полную синхронизацию. */
+    private const INCREMENTAL_MAX_AGE_DAYS = 7;
 
     public const MODE_FULL = 'full';
     public const MODE_GROUPS = 'groups';
@@ -41,8 +44,9 @@ final class SyncService
     /**
      * Один чанк синхронизации. Возвращает has_more, counts и т.д.
      * @param string $mode full|tasks|users — полная, только задачи+elapsed, только сотрудники
+     * @param bool $incremental при true — только изменённые с прошлой синхронизации (по CHANGED_DATE/DATE_MODIFY)
      */
-    public function runChunk(string $mode = self::MODE_FULL): array
+    public function runChunk(string $mode = self::MODE_FULL, bool $incremental = false): array
     {
         $url = $this->webhookUrl ?? $this->getWebhookFromSettings();
         if ($url === '' || $url === null) {
@@ -55,6 +59,12 @@ final class SyncService
         $tasksOffset = (int) $state['sync_tasks_offset'];
         $usersOffset = (int) $state['sync_users_offset'];
         $elapsedOffset = (int) ($state['sync_elapsed_task_offset'] ?? 0);
+
+        // Инкремент: если нет даты прошлой синхронизации или она слишком старая — делаем полную
+        $filterSince = $this->getIncrementalFilterSince($state);
+        if ($incremental && $filterSince === null) {
+            $incremental = false;
+        }
 
         // Режим «только группы» / «только сотрудники» / «только задачи» — сброс на нужную фазу.
         if ($mode === self::MODE_GROUPS && $phase !== 0) {
@@ -79,18 +89,32 @@ final class SyncService
             $elapsedOffset = 0;
             $this->setSyncState($phase, $groupsOffset, $tasksOffset, $usersOffset, $elapsedOffset);
         } elseif ($mode === self::MODE_FULL && $phase === 4) {
-            $phase = 0;
-            $groupsOffset = 0;
-            $tasksOffset = 0;
-            $usersOffset = 0;
-            $elapsedOffset = 0;
-            $this->setSyncState($phase, $groupsOffset, $tasksOffset, $usersOffset, $elapsedOffset);
+            if ($incremental) {
+                // Инкремент: пропускаем группы, начинаем с задач
+                $phase = 1;
+                $groupsOffset = 0;
+                $tasksOffset = 0;
+                $usersOffset = 0;
+                $elapsedOffset = 0;
+                $this->setSyncState(1, 0, 0, 0, 0);
+                $this->setIncrementalTaskIds([]);
+            } else {
+                $phase = 0;
+                $groupsOffset = 0;
+                $tasksOffset = 0;
+                $usersOffset = 0;
+                $elapsedOffset = 0;
+                $this->setSyncState($phase, $groupsOffset, $tasksOffset, $usersOffset, $elapsedOffset);
+            }
         }
 
         $client = new Client($url);
 
-        // Фаза 0: группы задач (проекты). Метод sonet.group.get может быть недоступен (нет прав/другой портал) — тогда пропускаем фазу.
+        // Фаза 0: группы задач (проекты). В инкременте фаза 0 пропущена. Метод sonet.group.get может быть недоступен — тогда пропускаем фазу.
         if ($phase === 0) {
+            if ($groupsOffset === 0) {
+                $this->markSyncStarted($state, $incremental);
+            }
             $groupsResult = $client->getGroupsOnePage($groupsOffset, self::PAGE_SIZE);
             if (!empty($groupsResult['error'])) {
                 $msg = $groupsResult['error_description'] ?? $groupsResult['error'] ?? '';
@@ -116,6 +140,7 @@ final class SyncService
             $groups = $groupsResult['data'] ?? [];
             $groupsCount = count($groups);
             $this->upsertTaskGroups($groups);
+            $this->addSyncRunTotals(0, 0, $groupsCount, 0);
             if ($groupsCount >= self::PAGE_SIZE) {
                 $groupsOffset += $groupsCount;
                 $this->setSyncState($phase, $groupsOffset, $tasksOffset, $usersOffset, $elapsedOffset);
@@ -130,6 +155,7 @@ final class SyncService
                 ];
             }
             if ($mode === self::MODE_GROUPS) {
+                $this->logSyncCompleted('groups');
                 $this->updateLastSyncAt(date('Y-m-d H:i:s'));
                 $this->setSyncState(4, 0, 0, 0, 0);
                 return [
@@ -173,10 +199,22 @@ final class SyncService
         $usersCount = 0;
 
         if ($phase === 1) {
+            if ($tasksOffset === 0) {
+                $this->markSyncStarted($state, $incremental);
+                if ($incremental) {
+                    $this->setIncrementalTaskIds([]);
+                    if ($filterSince !== null) {
+                        $this->settings->setValue('sync_filter_since', $filterSince);
+                    }
+                }
+            }
             [$dateFrom, $dateTo] = $this->getSyncDateRange();
             $filter = ['>=CREATED_DATE' => $dateFrom];
             if ($dateTo !== null) {
                 $filter['<=CREATED_DATE'] = $dateTo;
+            }
+            if ($incremental && $filterSince !== null) {
+                $filter['>=CHANGED_DATE'] = $filterSince;
             }
             $responsibleIds = $this->getSyncResponsibleIds();
             if ($responsibleIds !== []) {
@@ -203,6 +241,13 @@ final class SyncService
             }
             $tasksCount = count($tasks);
             $this->upsertTasks($tasks);
+            $this->addSyncRunTotals($tasksCount, 0, 0, 0);
+            if ($incremental && $tasksCount > 0) {
+                $ids = array_map(function ($t) {
+                    return (string) ($t['id'] ?? $t['ID'] ?? '');
+                }, $tasks);
+                $this->appendIncrementalTaskIds(array_filter($ids));
+            }
             if ($tasksCount >= self::PAGE_SIZE) {
                 $tasksOffset += $tasksCount;
                 $this->setSyncState($phase, 0, $tasksOffset, $usersOffset, $elapsedOffset);
@@ -223,7 +268,17 @@ final class SyncService
         }
 
         if ($phase === 2) {
-            $usersResult = $client->callOnePage('user.get', 'result', $usersOffset, self::PAGE_SIZE, $userSelect, []);
+            if ($usersOffset === 0 && $incremental && $filterSince !== null) {
+                $this->settings->setValue('sync_filter_since', $filterSince);
+            }
+            $userFilter = [];
+            if ($incremental) {
+                $since = $this->settings->getValue('sync_filter_since');
+                if ($since !== null && $since !== '') {
+                    $userFilter['>=TIMESTAMP_X'] = $since;
+                }
+            }
+            $usersResult = $client->callOnePage('user.get', 'result', $usersOffset, self::PAGE_SIZE, $userSelect, $userFilter);
             if (!empty($usersResult['error'])) {
                 return [
                     'success' => false,
@@ -238,6 +293,7 @@ final class SyncService
             $users = $usersResult['data'] ?? [];
             $usersCount = count($users);
             $this->upsertUsers($users);
+            $this->addSyncRunTotals(0, $usersCount, 0, 0);
             if ($usersCount >= self::PAGE_SIZE) {
                 $usersOffset += $usersCount;
                 $this->setSyncState($phase, 0, $tasksOffset, $usersOffset, $elapsedOffset);
@@ -252,6 +308,7 @@ final class SyncService
                 ];
             }
             if ($mode === self::MODE_USERS) {
+                $this->logSyncCompleted('users');
                 $this->updateLastSyncAt(date('Y-m-d H:i:s'));
                 $this->setSyncState(4, 0, 0, 0, 0);
                 return [
@@ -272,8 +329,14 @@ final class SyncService
         }
 
         if ($phase === 3) {
-            [$dateFrom, $dateTo] = $this->getSyncDateRange();
-            $taskIds = $this->getTaskIdsForElapsedSync($elapsedOffset, self::ELAPSED_TASKS_PER_CHUNK, $dateFrom, $dateTo);
+            $taskIds = [];
+            if ($incremental) {
+                $taskIds = $this->getIncrementalTaskIdsChunk($elapsedOffset, self::ELAPSED_TASKS_PER_CHUNK);
+            }
+            if ($taskIds === [] && !$incremental) {
+                [$dateFrom, $dateTo] = $this->getSyncDateRange();
+                $taskIds = $this->getTaskIdsForElapsedSync($elapsedOffset, self::ELAPSED_TASKS_PER_CHUNK, $dateFrom, $dateTo);
+            }
             $elapsedCount = 0;
             $syncedAt = date('Y-m-d H:i:s');
             foreach ($taskIds as $taskId) {
@@ -302,10 +365,16 @@ final class SyncService
                 usleep(600000);
             }
             $elapsedOffset += count($taskIds);
+            $this->addSyncRunTotals(0, 0, 0, $elapsedCount);
             if (count($taskIds) < self::ELAPSED_TASKS_PER_CHUNK) {
                 $phase = 4;
                 $elapsedOffset = 0;
+                $this->logSyncCompleted('full');
                 $this->updateLastSyncAt($syncedAt);
+                if ($incremental) {
+                    $this->setIncrementalTaskIds([]);
+                    $this->settings->setValue('sync_filter_since', '');
+                }
                 $this->setSyncState($phase, 0, $tasksOffset, $usersOffset, $elapsedOffset);
                 return [
                     'success' => true,
@@ -332,16 +401,150 @@ final class SyncService
         return ['success' => true, 'message' => 'OK', 'tasks_count' => 0, 'users_count' => 0, 'elapsed_count' => 0, 'groups_count' => 0, 'has_more' => false];
     }
 
+    /** Путь к файлу лога синхронизаций (backend/logs/sync.log). */
+    private function getSyncLogPath(): string
+    {
+        $path = $_ENV['SYNC_LOG_FILE'] ?? getenv('SYNC_LOG_FILE');
+        if (is_string($path) && $path !== '') {
+            return $path;
+        }
+        $backendDir = dirname(__DIR__, 2);
+        return $backendDir . DIRECTORY_SEPARATOR . 'logs' . DIRECTORY_SEPARATOR . 'sync.log';
+    }
+
+    private function appendSyncLogFile(string $line): void
+    {
+        $path = $this->getSyncLogPath();
+        $dir = dirname($path);
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0755, true);
+        }
+        $entry = date('Y-m-d H:i:s') . ' | ' . $line . "\n";
+        @file_put_contents($path, $entry, FILE_APPEND | LOCK_EX);
+    }
+
+    /** Накопленные за текущий прогон счётчики (для лога при завершении). */
+    private function getSyncRunTotals(): array
+    {
+        $v = $this->settings->getValues(['sync_run_tasks', 'sync_run_users', 'sync_run_groups', 'sync_run_elapsed']);
+        return [
+            'tasks' => (int) ($v['sync_run_tasks'] ?? 0),
+            'users' => (int) ($v['sync_run_users'] ?? 0),
+            'groups' => (int) ($v['sync_run_groups'] ?? 0),
+            'elapsed' => (int) ($v['sync_run_elapsed'] ?? 0),
+        ];
+    }
+
+    private function setSyncRunTotals(int $tasks, int $users, int $groups, int $elapsed): void
+    {
+        $this->settings->setValue('sync_run_tasks', (string) $tasks);
+        $this->settings->setValue('sync_run_users', (string) $users);
+        $this->settings->setValue('sync_run_groups', (string) $groups);
+        $this->settings->setValue('sync_run_elapsed', (string) $elapsed);
+    }
+
+    private function addSyncRunTotals(int $tasks, int $users, int $groups, int $elapsed): void
+    {
+        $t = $this->getSyncRunTotals();
+        $this->setSyncRunTotals(
+            $t['tasks'] + $tasks,
+            $t['users'] + $users,
+            $t['groups'] + $groups,
+            $t['elapsed'] + $elapsed
+        );
+    }
+
+    private function logSyncCompleted(string $scope): void
+    {
+        $totals = $this->getSyncRunTotals();
+        $parts = [];
+        if ($totals['tasks'] > 0) {
+            $parts[] = 'tasks=' . $totals['tasks'];
+        }
+        if ($totals['users'] > 0) {
+            $parts[] = 'users=' . $totals['users'];
+        }
+        if ($totals['groups'] > 0) {
+            $parts[] = 'groups=' . $totals['groups'];
+        }
+        if ($totals['elapsed'] > 0) {
+            $parts[] = 'elapsed=' . $totals['elapsed'];
+        }
+        $this->appendSyncLogFile('completed | ' . $scope . ' | ' . implode(' ', $parts));
+        $this->setSyncRunTotals(0, 0, 0, 0);
+    }
+
     private function getSyncState(): array
     {
-        $v = $this->settings->getValues(['sync_phase', 'sync_groups_offset', 'sync_tasks_offset', 'sync_users_offset', 'sync_elapsed_task_offset']);
+        $v = $this->settings->getValues([
+            'sync_phase', 'sync_groups_offset', 'sync_tasks_offset', 'sync_users_offset', 'sync_elapsed_task_offset',
+            'last_sync_at', 'last_sync_started_at', 'sync_filter_since', 'sync_incremental_task_ids',
+        ]);
         return [
             'sync_phase' => (int) ($v['sync_phase'] ?? 4),
             'sync_groups_offset' => (int) ($v['sync_groups_offset'] ?? 0),
             'sync_tasks_offset' => (int) ($v['sync_tasks_offset'] ?? 0),
             'sync_users_offset' => (int) ($v['sync_users_offset'] ?? 0),
             'sync_elapsed_task_offset' => (int) ($v['sync_elapsed_task_offset'] ?? 0),
+            'last_sync_at' => isset($v['last_sync_at']) && $v['last_sync_at'] !== '' ? trim($v['last_sync_at']) : null,
+            'last_sync_started_at' => isset($v['last_sync_started_at']) && $v['last_sync_started_at'] !== '' ? trim($v['last_sync_started_at']) : null,
+            'sync_filter_since' => isset($v['sync_filter_since']) && $v['sync_filter_since'] !== '' ? trim($v['sync_filter_since']) : null,
+            'sync_incremental_task_ids' => $v['sync_incremental_task_ids'] ?? '[]',
         ];
+    }
+
+    /** Для инкремента: дата «изменённые после». Если старше INCREMENTAL_MAX_AGE_DAYS — возвращаем null (полная синхронизация). */
+    private function getIncrementalFilterSince(array $state): ?string
+    {
+        $since = $state['last_sync_started_at'] ?? $state['last_sync_at'] ?? null;
+        if ($since === null || $since === '') {
+            return null;
+        }
+        $ts = strtotime($since);
+        if ($ts === false) {
+            return null;
+        }
+        $maxAge = strtotime('-' . self::INCREMENTAL_MAX_AGE_DAYS . ' days');
+        if ($ts < $maxAge) {
+            return null;
+        }
+        return date('Y-m-d H:i:s', $ts);
+    }
+
+    /** Зафиксировать время старта синхронизации (для следующего инкремента) и записать в лог. */
+    private function markSyncStarted(array $state, bool $incremental = false): void
+    {
+        $now = date('Y-m-d H:i:s');
+        $this->settings->setValue('last_sync_started_at', $now);
+        $this->setSyncRunTotals(0, 0, 0, 0);
+        $this->appendSyncLogFile('started | incremental=' . ($incremental ? '1' : '0'));
+    }
+
+    private function setIncrementalTaskIds(array $ids): void
+    {
+        $this->settings->setValue('sync_incremental_task_ids', json_encode($ids));
+    }
+
+    private function appendIncrementalTaskIds(array $ids): void
+    {
+        $raw = $this->settings->getValue('sync_incremental_task_ids');
+        $list = is_string($raw) ? (json_decode($raw, true) ?? []) : [];
+        if (!is_array($list)) {
+            $list = [];
+        }
+        $list = array_values(array_unique(array_merge($list, $ids)));
+        $this->settings->setValue('sync_incremental_task_ids', json_encode($list));
+    }
+
+    /** Чанк ID задач из накопленного списка инкремента (для фазы elapsed). */
+    private function getIncrementalTaskIdsChunk(int $offset, int $limit): array
+    {
+        $raw = $this->settings->getValue('sync_incremental_task_ids');
+        $list = is_string($raw) ? (json_decode($raw, true) ?? []) : [];
+        if (!is_array($list)) {
+            return [];
+        }
+        return array_slice($list, $offset, $limit);
     }
 
     private function setSyncState(int $phase, int $groupsOffset, int $tasksOffset, int $usersOffset, int $elapsedOffset = 0): void

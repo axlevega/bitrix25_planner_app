@@ -22,6 +22,7 @@ frontend/dist/
 scripts/fetched-htaccess/
 *.log
 cache/
+backend/logs/
 
 # PHP
 composer.lock
