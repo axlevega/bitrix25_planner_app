@@ -370,6 +370,45 @@ async function loadRefs() {
   }
 }
 
+/** Сброс фильтров до значений из настроек по умолчанию */
+const resetFiltersLoading = ref(false)
+async function resetFilters() {
+  resetFiltersLoading.value = true
+  error.value = null
+  try {
+    const settingsRes = await api.integrationSettings.get().catch(() => ({}))
+    defaultPeriod()
+    const defaultGroupIds = settingsRes.planning_default_group_ids
+    if (Array.isArray(defaultGroupIds) && defaultGroupIds.length > 0) {
+      selectedGroupIds.value = defaultGroupIds.map(String)
+    } else if (taskGroups.value?.length) {
+      selectedGroupIds.value = taskGroups.value.map((g) => g.bitrix24_group_id)
+    } else {
+      selectedGroupIds.value = []
+    }
+    const defaultDepId = settingsRes.planning_default_department_id
+    if (defaultDepId && departments.value?.some((d) => Number(d.id) === Number(defaultDepId))) {
+      scopeType.value = 'department'
+      departmentId.value = defaultDepId
+      specialistIds.value = []
+    } else {
+      scopeType.value = 'specialist'
+      departmentId.value = ''
+      specialistIds.value = []
+    }
+    hideTasksWithoutPlan.value = true
+    filterUfFieldCode.value = ''
+    filterUfValue.value = ''
+    if (scopeType.value === 'department' && departmentId.value) {
+      await loadGrid()
+    }
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    resetFiltersLoading.value = false
+  }
+}
+
 async function loadGrid() {
   if (!dateFrom.value || !dateTo.value) {
     error.value = 'Укажите период (дата начала и окончания)'
@@ -830,6 +869,9 @@ onUnmounted(() => {
             </div>
           </FilterDropdown>
         </div>
+        <UiButton variant="outline" :disabled="resetFiltersLoading" class="planning-filter__reset" @click="resetFilters">
+          {{ resetFiltersLoading ? 'Сброс…' : 'Сбросить' }}
+        </UiButton>
         <UiButton variant="primary" :disabled="loading" class="planning-filter__submit" @click="loadGrid">
           {{ loading ? 'Загрузка…' : 'Показать сетку' }}
         </UiButton>
