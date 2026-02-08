@@ -359,6 +359,11 @@ async function loadRefs() {
     }
     if (!dateFrom.value || !dateTo.value) defaultPeriod()
 
+    const defaultUfField = settingsRes.planning_default_uf_field_code ?? ''
+    const defaultUfValue = settingsRes.planning_default_uf_value ?? ''
+    filterUfFieldCode.value = (defaultUfField && typeof defaultUfField === 'string') ? defaultUfField : ''
+    filterUfValue.value = (defaultUfValue !== undefined && defaultUfValue !== null) ? String(defaultUfValue) : ''
+
     const defaultDepId = settingsRes.planning_default_department_id
     if (defaultDepId && departments.value.some((d) => Number(d.id) === Number(defaultDepId))) {
       scopeType.value = 'department'
@@ -397,8 +402,10 @@ async function resetFilters() {
       specialistIds.value = []
     }
     hideTasksWithoutPlan.value = true
-    filterUfFieldCode.value = ''
-    filterUfValue.value = ''
+    const defaultUfField = settingsRes.planning_default_uf_field_code ?? ''
+    const defaultUfValue = settingsRes.planning_default_uf_value ?? ''
+    filterUfFieldCode.value = (defaultUfField && typeof defaultUfField === 'string') ? defaultUfField : ''
+    filterUfValue.value = (defaultUfValue !== undefined && defaultUfValue !== null) ? String(defaultUfValue) : ''
     if (scopeType.value === 'department' && departmentId.value) {
       await loadGrid()
     }

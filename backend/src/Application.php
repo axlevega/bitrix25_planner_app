@@ -218,7 +218,7 @@ final class Application
         $this->router->get('/integration-settings', function (): array {
             $pdo = Database::getConnection();
             $repo = new IntegrationSettingsRepository($pdo);
-            $keys = ['portal_url', 'sync_interval_minutes', 'last_sync_at', 'sync_date_range_type', 'sync_date_from', 'sync_date_to', 'sync_specialist_ids', 'planning_default_department_id', 'planning_default_group_ids'];
+            $keys = ['portal_url', 'sync_interval_minutes', 'last_sync_at', 'sync_date_range_type', 'sync_date_from', 'sync_date_to', 'sync_specialist_ids', 'planning_default_department_id', 'planning_default_group_ids', 'planning_default_uf_field_code', 'planning_default_uf_value'];
             $v = $repo->getValues($keys);
             $out = [
                 'portal_url' => $v['portal_url'] ?? '',
@@ -231,6 +231,8 @@ final class Application
                 'sync_specialist_ids' => [],
                 'planning_default_department_id' => null,
                 'planning_default_group_ids' => [],
+                'planning_default_uf_field_code' => '',
+                'planning_default_uf_value' => '',
             ];
             if (isset($v['sync_specialist_ids']) && $v['sync_specialist_ids'] !== '') {
                 $decoded = json_decode($v['sync_specialist_ids'], true);
@@ -243,12 +245,18 @@ final class Application
                 $decoded = json_decode($v['planning_default_group_ids'], true);
                 $out['planning_default_group_ids'] = is_array($decoded) ? array_values(array_map('strval', $decoded)) : [];
             }
+            if (isset($v['planning_default_uf_field_code'])) {
+                $out['planning_default_uf_field_code'] = trim((string) $v['planning_default_uf_field_code']);
+            }
+            if (isset($v['planning_default_uf_value'])) {
+                $out['planning_default_uf_value'] = trim((string) $v['planning_default_uf_value']);
+            }
             return $out;
         });
         $this->router->post('/integration-settings', function (array $payload): array {
             $pdo = Database::getConnection();
             $repo = new IntegrationSettingsRepository($pdo);
-            $allowed = ['portal_url', 'webhook_token', 'sync_interval_minutes', 'sync_date_range_type', 'sync_date_from', 'sync_date_to', 'sync_specialist_ids', 'planning_default_department_id', 'planning_default_group_ids'];
+            $allowed = ['portal_url', 'webhook_token', 'sync_interval_minutes', 'sync_date_range_type', 'sync_date_from', 'sync_date_to', 'sync_specialist_ids', 'planning_default_department_id', 'planning_default_group_ids', 'planning_default_uf_field_code', 'planning_default_uf_value'];
             foreach ($allowed as $key) {
                 if (!array_key_exists($key, $payload)) {
                     continue;
@@ -259,6 +267,8 @@ final class Application
                 } elseif ($key === 'planning_default_group_ids') {
                     $val = $payload[$key];
                     $repo->setValue($key, is_array($val) ? json_encode(array_values(array_map('strval', $val))) : '[]');
+                } elseif ($key === 'planning_default_uf_field_code' || $key === 'planning_default_uf_value') {
+                    $repo->setValue($key, trim((string) ($payload[$key] ?? '')));
                 } elseif ($key === 'sync_specialist_ids') {
                     $val = $payload[$key];
                     $repo->setValue($key, is_array($val) ? json_encode(array_values(array_map('intval', $val))) : '[]');
@@ -274,11 +284,13 @@ final class Application
                     $repo->setValue($key, trim((string) $payload[$key]));
                 }
             }
-            $v = $repo->getValues(['portal_url', 'sync_interval_minutes', 'sync_date_range_type', 'sync_date_from', 'sync_date_to', 'sync_specialist_ids', 'planning_default_department_id', 'planning_default_group_ids']);
+            $v = $repo->getValues(['portal_url', 'sync_interval_minutes', 'sync_date_range_type', 'sync_date_from', 'sync_date_to', 'sync_specialist_ids', 'planning_default_department_id', 'planning_default_group_ids', 'planning_default_uf_field_code', 'planning_default_uf_value']);
             $ids = isset($v['sync_specialist_ids']) && $v['sync_specialist_ids'] !== '' ? (json_decode($v['sync_specialist_ids'], true) ?: []) : [];
             $defaultDepId = isset($v['planning_default_department_id']) && $v['planning_default_department_id'] !== '' ? (int) $v['planning_default_department_id'] : null;
             $defaultGroupIds = isset($v['planning_default_group_ids']) && $v['planning_default_group_ids'] !== '' ? (json_decode($v['planning_default_group_ids'], true) ?: []) : [];
             $defaultGroupIds = is_array($defaultGroupIds) ? array_values(array_map('strval', $defaultGroupIds)) : [];
+            $defaultUfField = isset($v['planning_default_uf_field_code']) ? trim((string) $v['planning_default_uf_field_code']) : '';
+            $defaultUfValue = isset($v['planning_default_uf_value']) ? trim((string) $v['planning_default_uf_value']) : '';
             return [
                 'portal_url' => $v['portal_url'] ?? '',
                 'sync_interval_minutes' => (int) ($v['sync_interval_minutes'] ?? 30),
@@ -288,6 +300,8 @@ final class Application
                 'sync_specialist_ids' => $ids,
                 'planning_default_department_id' => $defaultDepId,
                 'planning_default_group_ids' => $defaultGroupIds,
+                'planning_default_uf_field_code' => $defaultUfField,
+                'planning_default_uf_value' => $defaultUfValue,
             ];
         });
 

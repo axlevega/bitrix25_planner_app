@@ -33,6 +33,8 @@ const defaultDepartmentId = computed({
 const settings = ref({
   planning_default_department_id: null,
   planning_default_group_ids: [],
+  planning_default_uf_field_code: '',
+  planning_default_uf_value: '',
 })
 const departments = ref([])
 const taskGroups = ref([])
@@ -58,6 +60,8 @@ async function load() {
     settings.value = {
       planning_default_department_id: res.planning_default_department_id ?? null,
       planning_default_group_ids: Array.isArray(res.planning_default_group_ids) ? res.planning_default_group_ids : [],
+      planning_default_uf_field_code: res.planning_default_uf_field_code ?? '',
+      planning_default_uf_value: res.planning_default_uf_value ?? '',
     }
   } catch (e) {
     error.value = e.message
@@ -85,6 +89,8 @@ async function saveFilters() {
     await api.integrationSettings.save({
       planning_default_department_id: settings.value.planning_default_department_id ?? null,
       planning_default_group_ids: settings.value.planning_default_group_ids ?? [],
+      planning_default_uf_field_code: (settings.value.planning_default_uf_field_code || '').trim() || null,
+      planning_default_uf_value: (settings.value.planning_default_uf_value ?? '').trim() || null,
     })
     await load()
   } catch (e) {
@@ -134,6 +140,28 @@ onMounted(load)
               placeholder="Поиск и выбор групп…"
               style="max-width: 320px"
             />
+          </div>
+
+          <div v-if="taskUfCatalog.length" class="filters-form__block">
+            <span class="filters-form__block-title">Фильтр по пользовательскому полю по умолчанию</span>
+            <UiMuted tag="small">В сетке планирования при открытии и при сбросе фильтров будет применён этот фильтр по полю задачи.</UiMuted>
+            <label class="filters-form__label">
+              <span class="filters-form__label-text">Поле</span>
+              <UiSelect v-model="settings.planning_default_uf_field_code" style="max-width: 320px">
+                <option value="">— не фильтровать —</option>
+                <option v-for="f in taskUfCatalog" :key="f.field_code" :value="f.field_code">
+                  {{ f.label || f.field_code }}
+                </option>
+              </UiSelect>
+            </label>
+            <label v-if="settings.planning_default_uf_field_code" class="filters-form__label">
+              <span class="filters-form__label-text">Значение</span>
+              <UiSelect v-model="settings.planning_default_uf_value" style="max-width: 200px">
+                <option value="">— любое —</option>
+                <option value="1">да (1)</option>
+                <option value="0">нет (0)</option>
+              </UiSelect>
+            </label>
           </div>
 
           <div class="filters-form__actions">
@@ -198,6 +226,16 @@ onMounted(load)
 }
 .filters-form__block-title {
   font-weight: 600;
+  font-size: 0.9rem;
+}
+.filters-form__label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+.filters-form__label-text {
+  min-width: 4.5rem;
   font-size: 0.9rem;
 }
 .filters-form__actions {
