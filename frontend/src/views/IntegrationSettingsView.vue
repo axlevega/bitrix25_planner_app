@@ -1,6 +1,17 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { api } from '../api/client'
+import {
+  UiPageHeader,
+  UiAlert,
+  UiLoading,
+  UiCard,
+  UiInput,
+  UiRadio,
+  UiCheckbox,
+  UiButton,
+  UiMuted,
+} from '../components/ui'
 
 const { embedded } = defineProps({ embedded: { type: Boolean, default: false } })
 
@@ -133,257 +144,169 @@ onMounted(load)
 
 <template>
   <div class="page">
-    <template v-if="!embedded">
-      <h1 class="page__title">Настройки интеграции</h1>
-      <p class="page__desc">URL портала Bitrix24 и токен вебхука. Токен не отображается после сохранения.</p>
-    </template>
-    <template v-else>
-      <h2 class="page__title page__title--tab">Синхронизация</h2>
-      <p class="page__desc">URL портала Bitrix24, токен вебхука, период и запуск синхронизации.</p>
-    </template>
+    <UiPageHeader
+      :title="embedded ? 'Синхронизация' : 'Настройки интеграции'"
+      :description="
+        embedded
+          ? 'URL портала Bitrix24, токен вебхука, период и запуск синхронизации.'
+          : 'URL портала Bitrix24 и токен вебхука. Токен не отображается после сохранения.'
+      "
+      :size="embedded ? 'md' : 'lg'"
+    />
 
-    <p v-if="error" class="error">{{ error }}</p>
-    <p v-if="syncResult" class="sync-result" :class="{ 'sync-result--ok': syncResult.success, 'sync-result--err': !syncResult.success }">
+    <UiAlert v-if="error" variant="error">{{ error }}</UiAlert>
+    <UiAlert
+      v-if="syncResult"
+      :variant="syncResult.success ? 'success' : 'error'"
+    >
       <template v-if="syncResult.success">
         {{ syncResult.in_progress ? syncResult.message + '…' : syncResult.message }}
       </template>
       <template v-else>{{ syncResult.message }}</template>
-    </p>
+    </UiAlert>
 
-    <div v-if="loading" class="loading">Загрузка…</div>
+    <UiLoading v-if="loading" />
     <template v-else>
-      <section class="form-section">
-        <form class="form form--vertical" @submit.prevent="save">
-          <label>
+      <UiCard tag="section" class="integration-form">
+        <form class="integration-form__form" @submit.prevent="save">
+          <label class="integration-form__label">
             <span>URL портала Bitrix24 *</span>
-            <input
+            <UiInput
               v-model="settings.portal_url"
               type="url"
-              class="input"
               placeholder="https://ваш-портал.bitrix24.ru"
             />
           </label>
-          <label>
+          <label class="integration-form__label">
             <span>Токен вебхука (часть пути после /rest/)</span>
-            <input
+            <UiInput
               v-model="settings.webhook_token"
               type="password"
-              class="input"
               placeholder="1/xxxxxxxxxxxx/"
               autocomplete="off"
             />
-            <small>Например: 1/abc123def/ — вводите без ведущего слэша, сохраняется на сервере.</small>
+            <UiMuted tag="small">Например: 1/abc123def/ — вводите без ведущего слэша, сохраняется на сервере.</UiMuted>
           </label>
-          <label>
+          <label class="integration-form__label">
             <span>Интервал синхронизации (минут)</span>
-            <input
+            <UiInput
               v-model.number="settings.sync_interval_minutes"
               type="number"
-              min="5"
-              max="1440"
-              class="input"
+              :min="5"
+              :max="1440"
             />
           </label>
 
-          <div class="form__block">
-            <span class="form__block-title">Диапазон дат для синхронизации задач</span>
-            <div class="form__radios">
-              <label class="form__radio">
-                <input v-model="settings.sync_date_range_type" type="radio" value="week" />
-                <span>Последняя неделя</span>
-              </label>
-              <label class="form__radio">
-                <input v-model="settings.sync_date_range_type" type="radio" value="month" />
-                <span>Месяц</span>
-              </label>
-              <label class="form__radio">
-                <input v-model="settings.sync_date_range_type" type="radio" value="half_year" />
-                <span>Полгода</span>
-              </label>
-              <label class="form__radio">
-                <input v-model="settings.sync_date_range_type" type="radio" value="year" />
-                <span>Год</span>
-              </label>
-              <label class="form__radio">
-                <input v-model="settings.sync_date_range_type" type="radio" value="custom" />
-                <span>Свой диапазон</span>
-              </label>
+          <div class="integration-form__block">
+            <span class="integration-form__block-title">Диапазон дат для синхронизации задач</span>
+            <div class="integration-form__radios">
+              <UiRadio v-model="settings.sync_date_range_type" name="sync_date_range" value="week">Последняя неделя</UiRadio>
+              <UiRadio v-model="settings.sync_date_range_type" name="sync_date_range" value="month">Месяц</UiRadio>
+              <UiRadio v-model="settings.sync_date_range_type" name="sync_date_range" value="half_year">Полгода</UiRadio>
+              <UiRadio v-model="settings.sync_date_range_type" name="sync_date_range" value="year">Год</UiRadio>
+              <UiRadio v-model="settings.sync_date_range_type" name="sync_date_range" value="custom">Свой диапазон</UiRadio>
             </div>
-            <div v-if="settings.sync_date_range_type === 'custom'" class="form__custom-dates">
-              <label>
+            <div v-if="settings.sync_date_range_type === 'custom'" class="integration-form__custom-dates">
+              <label class="integration-form__label">
                 <span>С</span>
-                <input v-model="settings.sync_date_from" type="date" class="input" />
+                <UiInput v-model="settings.sync_date_from" type="date" />
               </label>
-              <label>
+              <label class="integration-form__label">
                 <span>По</span>
-                <input v-model="settings.sync_date_to" type="date" class="input" />
+                <UiInput v-model="settings.sync_date_to" type="date" />
               </label>
             </div>
           </div>
 
-          <div class="form__block">
-            <span class="form__block-title">Специалисты для синхронизации задач</span>
-            <small>Выберите, по кому загружать задачи из Bitrix24. Пусто — по всем пользователям.</small>
-            <div class="specialists-checkboxes">
-              <label
+          <div class="integration-form__block">
+            <span class="integration-form__block-title">Специалисты для синхронизации задач</span>
+            <UiMuted tag="small">Выберите, по кому загружать задачи из Bitrix24. Пусто — по всем пользователям.</UiMuted>
+            <div class="integration-form__checkboxes">
+              <UiCheckbox
                 v-for="s in specialists"
                 :key="s.id"
-                class="form__checkbox"
+                v-model="settings.sync_specialist_ids"
+                :value="Number(s.id)"
               >
-                <input
-                  type="checkbox"
-                  :checked="settings.sync_specialist_ids.includes(Number(s.id))"
-                  @change="toggleSpecialist(s.id)"
-                />
-                <span>{{ s.name }}{{ s.department_name ? ` (${s.department_name})` : '' }}</span>
-              </label>
+                {{ s.name }}{{ s.department_name ? ` (${s.department_name})` : '' }}
+              </UiCheckbox>
             </div>
           </div>
 
-          <div class="form__actions">
-            <button type="submit" class="btn btn--primary" :disabled="saving">
+          <div class="integration-form__actions">
+            <UiButton type="submit" variant="primary" :disabled="saving">
               {{ saving ? 'Сохранение…' : 'Сохранить настройки' }}
-            </button>
+            </UiButton>
           </div>
         </form>
-      </section>
+      </UiCard>
 
-      <section class="sync-section">
-        <h2>Синхронизация</h2>
-        <p class="sync-desc">
+      <UiCard tag="section" class="integration-sync">
+        <h2 class="integration-sync__title">Синхронизация</h2>
+        <p class="integration-sync__desc">
           Последняя синхронизация: <strong>{{ lastSyncText() }}</strong>
         </p>
-        <p class="sync-desc sync-desc--hint">
+        <UiMuted tag="p" class="integration-sync__hint">
           Для учёта периода и списка специалистов сначала нажмите «Сохранить» выше. Кнопки:
           <strong>Сотрудники</strong> — только справочник пользователей из Битрикс24;
           <strong>Задачи</strong> — только задачи за выбранный период + учёт времени по ним;
           <strong>Всё подряд</strong> — полный цикл: задачи за период → сотрудники → учёт времени по задачам.
-        </p>
-        <div class="sync-buttons">
-          <button
-            type="button"
-            class="btn btn--primary btn--sync"
-            :disabled="syncing"
-            @click="runSync('users')"
-          >
+        </UiMuted>
+        <div class="integration-sync__buttons">
+          <UiButton variant="primary" :disabled="syncing" @click="runSync('users')">
             {{ syncing ? 'Синхронизация…' : 'Синхронизировать сотрудников' }}
-          </button>
-          <button
-            type="button"
-            class="btn btn--outline btn--sync"
-            :disabled="syncing"
-            @click="runSync('tasks')"
-          >
+          </UiButton>
+          <UiButton variant="outline" :disabled="syncing" @click="runSync('tasks')">
             {{ syncing ? 'Синхронизация…' : 'Синхронизировать задачи' }}
-          </button>
-          <button
-            type="button"
-            class="btn btn--outline btn--sync"
-            :disabled="syncing"
-            @click="runSync('full')"
-          >
+          </UiButton>
+          <UiButton variant="outline" :disabled="syncing" @click="runSync('full')">
             {{ syncing ? 'Синхронизация…' : 'Всё подряд (задачи → сотрудники → учёт времени)' }}
-          </button>
+          </UiButton>
         </div>
-      </section>
+      </UiCard>
     </template>
   </div>
 </template>
 
 <style lang="scss" scoped>
-.page__title {
-  margin: 0 0 0.25rem;
-  font-size: 1.5rem;
-}
-.page__title--tab {
-  font-size: 1.2rem;
-  margin-bottom: 0.5rem;
-}
-.page__desc {
-  margin: 0 0 1rem;
-  color: #64748b;
-  font-size: 0.9rem;
-}
-.error {
-  color: var(--color-error);
-  margin-bottom: 1rem;
-}
-.sync-result {
-  padding: 0.5rem 0.75rem;
-  border-radius: 4px;
-  margin-bottom: 1rem;
-}
-.sync-result--ok {
-  background: #d1fae5;
-  color: #065f46;
-}
-.sync-result--err {
-  background: #fee2e2;
-  color: #991b1b;
-}
-.loading {
-  color: #64748b;
-}
-.form-section {
-  background: #fff;
-  padding: 1rem;
-  border-radius: 8px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+.integration-form {
   margin-bottom: 1.5rem;
 }
-.form--vertical {
+.integration-form__form {
   display: flex;
   flex-direction: column;
   gap: 1rem;
   max-width: 560px;
 }
-.form--vertical label {
+.integration-form__label {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
   font-size: 0.9rem;
 }
-.form--vertical small {
-  color: #64748b;
-  font-size: 0.8rem;
-}
-.form__block {
+.integration-form__block {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
 }
-.form__block-title {
+.integration-form__block-title {
   font-weight: 600;
   font-size: 0.9rem;
 }
-.form__radios {
+.integration-form__radios {
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem 1.25rem;
 }
-.form__radio {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  cursor: pointer;
-  font-size: 0.9rem;
-}
-.form__custom-dates {
+.integration-form__custom-dates {
   display: flex;
   gap: 1rem;
   margin-top: 0.25rem;
 }
-.form__custom-dates label {
+.integration-form__custom-dates .integration-form__label {
   flex: 1;
 }
-.form__checkbox {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  cursor: pointer;
-  font-size: 0.9rem;
-}
-.specialists-checkboxes {
+.integration-form__checkboxes {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
@@ -391,61 +314,24 @@ onMounted(load)
   overflow-y: auto;
   padding: 0.5rem 0;
 }
-.form__actions {
+.integration-form__actions {
   margin-top: 0.5rem;
 }
-.input {
-  padding: 0.5rem 0.75rem;
-  border: 1px solid #cbd5e1;
-  border-radius: 4px;
-}
-.btn {
-  padding: 0.5rem 1rem;
-  border: 1px solid #cbd5e1;
-  border-radius: 4px;
-  background: #fff;
-  cursor: pointer;
-  font-size: 0.9rem;
-}
-.btn--primary {
-  background: var(--color-primary);
-  color: #fff;
-  border-color: var(--color-primary);
-}
-.btn--outline {
-  background: #fff;
-  color: var(--color-primary);
-  border-color: var(--color-primary);
-}
-.btn:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-}
-.sync-buttons {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-.sync-desc--hint {
-  font-size: 0.85rem;
-  color: #64748b;
-  margin-bottom: 0.5rem;
-}
-.sync-section {
-  background: #fff;
-  padding: 1rem;
-  border-radius: 8px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-}
-.sync-section h2 {
+.integration-sync__title {
   margin: 0 0 0.5rem;
   font-size: 1.1rem;
 }
-.sync-desc {
+.integration-sync__desc {
   margin: 0 0 0.75rem;
   font-size: 0.9rem;
 }
-.btn--sync {
-  padding: 0.6rem 1.2rem;
+.integration-sync__hint {
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
+}
+.integration-sync__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }
 </style>

@@ -1,8 +1,34 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { api } from '../api/client'
+import {
+  UiPageHeader,
+  UiAlert,
+  UiLoading,
+  UiCard,
+  UiSelect,
+  UiMultiSelect,
+  UiTable,
+  UiInput,
+  UiButton,
+  UiMuted,
+} from '../components/ui'
 
 const { embedded } = defineProps({ embedded: { type: Boolean, default: false } })
+
+const groupOptions = computed(() =>
+  (taskGroups.value || []).map((g) => ({
+    value: g.bitrix24_group_id,
+    label: g.name || String(g.bitrix24_group_id),
+  }))
+)
+
+const defaultDepartmentId = computed({
+  get: () => settings.value.planning_default_department_id ?? '',
+  set: (v) => {
+    settings.value.planning_default_department_id = v === '' ? null : v
+  },
+})
 
 const settings = ref({
   planning_default_department_id: null,
@@ -73,57 +99,57 @@ onMounted(load)
 
 <template>
   <div class="page">
-    <template v-if="!embedded">
-      <h1 class="page__title">Фильтры</h1>
-      <p class="page__desc">Отдел и группы по умолчанию для планирования, подписи пользовательских полей.</p>
-    </template>
-    <template v-else>
-      <h2 class="page__title page__title--tab">Фильтры</h2>
-      <p class="page__desc">Отдел и группы по умолчанию, подписи полей для фильтров в планировании.</p>
-    </template>
+    <UiPageHeader
+      title="Фильтры"
+      :description="
+        embedded
+          ? 'Отдел и группы по умолчанию, подписи полей для фильтров в планировании.'
+          : 'Отдел и группы по умолчанию для планирования, подписи пользовательских полей.'
+      "
+      :size="embedded ? 'md' : 'lg'"
+    />
 
-    <p v-if="error" class="error">{{ error }}</p>
-    <div v-if="loading" class="loading">Загрузка…</div>
+    <UiAlert v-if="error" variant="error">{{ error }}</UiAlert>
+    <UiLoading v-if="loading" />
     <template v-else>
-      <section class="form-section">
-        <form class="form form--vertical" @submit.prevent="saveFilters">
-          <div class="form__block">
-            <span class="form__block-title">Отдел по умолчанию в планировании</span>
-            <small>При открытии страницы «Планирование» будет выбран этот отдел и подгружены данные.</small>
-            <label class="form__select-wrap">
-              <select v-model="settings.planning_default_department_id" class="input">
-                <option :value="null">— не задан —</option>
+      <UiCard tag="section" class="filters-form">
+        <form class="filters-form__form" @submit.prevent="saveFilters">
+          <div class="filters-form__block">
+            <span class="filters-form__block-title">Отдел по умолчанию в планировании</span>
+            <UiMuted tag="small">При открытии страницы «Планирование» будет выбран этот отдел и подгружены данные.</UiMuted>
+            <label class="filters-form__label">
+              <UiSelect v-model="defaultDepartmentId" style="max-width: 320px">
+                <option value="">— не задан —</option>
                 <option v-for="d in departments" :key="d.id" :value="d.id">{{ d.name }}</option>
-              </select>
+              </UiSelect>
             </label>
           </div>
 
-          <div v-if="taskGroups.length" class="form__block">
-            <span class="form__block-title">Группы по умолчанию для плана</span>
-            <small>В сетке планирования по умолчанию показываются только задачи из выбранных групп (проектов). Пусто — все группы.</small>
-            <label class="form__multi-select">
-              <select v-model="settings.planning_default_group_ids" class="input" multiple size="4">
-                <option v-for="g in taskGroups" :key="g.bitrix24_group_id" :value="g.bitrix24_group_id">
-                  {{ g.name || g.bitrix24_group_id }}
-                </option>
-              </select>
-            </label>
+          <div v-if="groupOptions.length" class="filters-form__block">
+            <span class="filters-form__block-title">Группы по умолчанию для плана</span>
+            <UiMuted tag="small">В сетке планирования по умолчанию показываются только задачи из выбранных групп (проектов). Пусто — все группы.</UiMuted>
+            <UiMultiSelect
+              v-model="settings.planning_default_group_ids"
+              :options="groupOptions"
+              placeholder="Поиск и выбор групп…"
+              style="max-width: 320px"
+            />
           </div>
 
-          <div class="form__actions">
-            <button type="submit" class="btn btn--primary" :disabled="saving">
+          <div class="filters-form__actions">
+            <UiButton type="submit" variant="primary" :disabled="saving">
               {{ saving ? 'Сохранение…' : 'Сохранить' }}
-            </button>
+            </UiButton>
           </div>
         </form>
-      </section>
+      </UiCard>
 
-      <section v-if="taskUfCatalog.length" class="uf-catalog-section">
-        <h2>Подписи пользовательских полей задач</h2>
-        <p class="sync-desc sync-desc--hint">
+      <UiCard v-if="taskUfCatalog.length" tag="section" class="filters-uf">
+        <h2 class="filters-uf__title">Подписи пользовательских полей задач</h2>
+        <UiMuted tag="p" class="filters-uf__hint">
           Подписи используются в фильтрах (например, в сетке планирования). Заполненные значения не перезаписываются при синхронизации.
-        </p>
-        <table class="uf-catalog-table">
+        </UiMuted>
+        <UiTable class="filters-uf__table">
           <thead>
             <tr>
               <th>Код поля (B24)</th>
@@ -135,151 +161,69 @@ onMounted(load)
             <tr v-for="item in taskUfCatalog" :key="item.field_code">
               <td><code>{{ item.field_code }}</code></td>
               <td>
-                <input v-model="item.label_edit" type="text" class="input" placeholder="Например: Флайт" />
+                <UiInput v-model="item.label_edit" placeholder="Например: Флайт" class="filters-uf__input" />
               </td>
               <td>
-                <button type="button" class="btn btn--outline btn--sm" :disabled="ufLabelSaving === item.field_code" @click="saveUfLabel(item)">
+                <UiButton
+                  size="sm"
+                  variant="outline"
+                  :disabled="ufLabelSaving === item.field_code"
+                  @click="saveUfLabel(item)"
+                >
                   {{ ufLabelSaving === item.field_code ? '…' : 'Сохранить' }}
-                </button>
+                </UiButton>
               </td>
             </tr>
           </tbody>
-        </table>
-      </section>
+        </UiTable>
+      </UiCard>
     </template>
   </div>
 </template>
 
 <style lang="scss" scoped>
-.page__title {
-  margin: 0 0 0.25rem;
-  font-size: 1.5rem;
-}
-.page__title--tab {
-  font-size: 1.2rem;
-  margin-bottom: 0.5rem;
-}
-.page__desc {
-  margin: 0 0 1rem;
-  color: #64748b;
-  font-size: 0.9rem;
-}
-.error {
-  color: var(--color-error);
-  margin-bottom: 1rem;
-}
-.loading {
-  color: #64748b;
-}
-.form-section {
-  background: #fff;
-  padding: 1rem;
-  border-radius: 8px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+.filters-form {
   margin-bottom: 1.5rem;
 }
-.form--vertical {
+.filters-form__form {
   display: flex;
   flex-direction: column;
   gap: 1rem;
   max-width: 560px;
 }
-.form--vertical small {
-  color: #64748b;
-  font-size: 0.8rem;
-}
-.form__block {
+.filters-form__block {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
 }
-.form__block-title {
+.filters-form__block-title {
   font-weight: 600;
   font-size: 0.9rem;
 }
-.form__multi-select {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  max-width: 320px;
-}
-.form__multi-select .input {
-  min-height: 6rem;
-}
-.form__actions {
+.filters-form__actions {
   margin-top: 0.5rem;
 }
-.input {
-  padding: 0.5rem 0.75rem;
-  border: 1px solid #cbd5e1;
-  border-radius: 4px;
-}
-.btn {
-  padding: 0.5rem 1rem;
-  border: 1px solid #cbd5e1;
-  border-radius: 4px;
-  background: #fff;
-  cursor: pointer;
-  font-size: 0.9rem;
-}
-.btn--primary {
-  background: var(--color-primary);
-  color: #fff;
-  border-color: var(--color-primary);
-}
-.btn--outline {
-  background: #fff;
-  color: var(--color-primary);
-  border-color: var(--color-primary);
-}
-.btn:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-}
-.sync-desc--hint {
-  font-size: 0.85rem;
-  color: #64748b;
-  margin-bottom: 0.5rem;
-}
-.uf-catalog-section {
-  padding: 1rem;
-  background: #fff;
-  border-radius: 8px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-}
-.uf-catalog-section h2 {
+.filters-uf__title {
   margin: 0 0 0.5rem;
   font-size: 1.1rem;
 }
-.uf-catalog-table {
-  width: 100%;
+.filters-uf__hint {
+  margin-bottom: 0.5rem;
+}
+.filters-uf__table {
   max-width: 560px;
-  border-collapse: collapse;
   margin-top: 0.5rem;
 }
-.uf-catalog-table th,
-.uf-catalog-table td {
-  padding: 0.5rem 0.75rem;
-  text-align: left;
-  border-bottom: 1px solid #e2e8f0;
-}
-.uf-catalog-table th {
-  font-weight: 600;
-  font-size: 0.85rem;
+.filters-uf__table :deep(th) {
   color: #64748b;
 }
-.uf-catalog-table code {
+.filters-uf__table :deep(code) {
   font-size: 0.85rem;
   background: #f1f5f9;
   padding: 0.2rem 0.4rem;
   border-radius: 4px;
 }
-.uf-catalog-table .input {
-  width: 100%;
+.filters-uf__input {
   max-width: 200px;
-}
-.btn--sm {
-  padding: 0.35rem 0.65rem;
-  font-size: 0.85rem;
 }
 </style>

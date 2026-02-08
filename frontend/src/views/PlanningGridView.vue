@@ -1,6 +1,19 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
 import { api } from '../api/client'
+import {
+  UiPageHeader,
+  UiAlert,
+  UiLoading,
+  UiRadio,
+  UiSelect,
+  UiMultiSelect,
+  UiInput,
+  UiCheckbox,
+  UiButton,
+  UiModal,
+  UiMuted,
+} from '../components/ui'
 
 const specialists = ref([])
 const departments = ref([])
@@ -24,6 +37,17 @@ const taskUfCatalog = ref([])
 const taskGroups = ref([])
 /** Выбранные группы для фильтра (по умолчанию все); пустой массив = все группы */
 const selectedGroupIds = ref([])
+
+const specialistOptions = computed(() =>
+  (specialists.value || []).map((s) => ({ value: s.id, label: s.name || String(s.id) }))
+)
+const groupOptions = computed(() =>
+  (taskGroups.value || []).map((g) => ({
+    value: g.bitrix24_group_id,
+    label: g.name || String(g.bitrix24_group_id),
+  }))
+)
+
 /** Ref контейнера скролла таблицы (для автоскролла до первого заполненного дня) */
 const tableScrollWrapRef = ref(null)
 /** Ref блока над таблицей (заголовок страницы + фильтры + заголовок секции) для расчёта высоты таблицы */
@@ -706,81 +730,80 @@ onUnmounted(() => {
 <template>
   <div class="page">
     <div ref="aboveTableRef" class="planning-above-table">
-      <h1 class="page__title">Планирование (сетка)</h1>
-      <p class="page__desc">Сетка по задачам Bitrix24: у каждой задачи подстроки — <strong>План</strong> (светло-голубой), <strong>Факт</strong> (светло-оранжевый). При переплане ПМ в строке плана отображаются данные переплана. Колонки — дни. Запустите синхронизацию в настройках интеграции.</p>
+      <UiPageHeader
+        title="Планирование (сетка)"
+        description="Сетка по задачам Bitrix24: у каждой задачи подстроки — План (светло-голубой), Факт (светло-оранжевый). При переплане ПМ в строке плана отображаются данные переплана. Колонки — дни. Запустите синхронизацию в настройках интеграции."
+      />
 
-      <p v-if="error" class="error">{{ error }}</p>
+      <UiAlert v-if="error" variant="error">{{ error }}</UiAlert>
 
-      <section class="filter-section">
-      <label>
-        <input v-model="scopeType" type="radio" value="specialist" /> Специалисты
-      </label>
-      <label>
-        <input v-model="scopeType" type="radio" value="department" /> Отдел
-      </label>
-      <template v-if="scopeType === 'specialist'">
-        <label class="filter-multi">
-          <span>Специалисты:</span>
-          <select v-model="specialistIds" class="input" multiple size="3">
-            <option v-for="s in specialists" :key="s.id" :value="s.id">{{ s.name }}</option>
-          </select>
+      <section class="planning-filter">
+        <UiRadio v-model="scopeType" name="scopeType" value="specialist">Специалисты</UiRadio>
+        <UiRadio v-model="scopeType" name="scopeType" value="department">Отдел</UiRadio>
+        <template v-if="scopeType === 'specialist'">
+          <label class="planning-filter__multi">
+            <span>Специалисты:</span>
+            <UiMultiSelect
+              v-model="specialistIds"
+              :options="specialistOptions"
+              placeholder="Поиск и выбор…"
+              style="min-width: 200px"
+            />
+          </label>
+        </template>
+        <label v-else class="planning-filter__label">
+          <UiSelect v-model="departmentId" style="min-width: 140px">
+            <option value="">— отдел —</option>
+            <option v-for="d in departments" :key="d.id" :value="d.id">{{ d.name }}</option>
+          </UiSelect>
         </label>
-      </template>
-      <label v-else>
-        <select v-model="departmentId" class="input">
-          <option value="">— отдел —</option>
-          <option v-for="d in departments" :key="d.id" :value="d.id">{{ d.name }}</option>
-        </select>
-      </label>
-      <label>С <input v-model="dateFrom" type="date" class="input" /></label>
-      <label>По <input v-model="dateTo" type="date" class="input" /></label>
-      <template v-if="taskGroups.length">
-        <label class="filter-multi">
-          <span>Группы (проекты):</span>
-          <select v-model="selectedGroupIds" class="input" multiple size="3">
-            <option v-for="g in taskGroups" :key="g.bitrix24_group_id" :value="g.bitrix24_group_id">
-              {{ g.name || g.bitrix24_group_id }}
-            </option>
-          </select>
-        </label>
-      </template>
-      <label class="filter-checkbox">
-        <input v-model="hideTasksWithoutPlan" type="checkbox" />
-        Скрыть задачи без планового времени
-      </label>
-      <template v-if="taskUfCatalog.length">
-        <label>
-          <span>Фильтр по полю</span>
-          <select v-model="filterUfFieldCode" class="input">
-            <option value="">— не фильтровать —</option>
-            <option v-for="f in taskUfCatalog" :key="f.field_code" :value="f.field_code">
-              {{ f.label || f.field_code }}
-            </option>
-          </select>
-        </label>
-        <label v-if="filterUfFieldCode">
-          <span>Значение</span>
-          <select v-model="filterUfValue" class="input">
-            <option value="">— любое —</option>
-            <option value="1">да (1)</option>
-            <option value="0">нет (0)</option>
-          </select>
-        </label>
-      </template>
-      <button type="button" class="btn btn--primary" :disabled="loading" @click="loadGrid">
-        {{ loading ? 'Загрузка…' : 'Показать сетку' }}
-      </button>
-    </section>
+        <label class="planning-filter__label">С <UiInput v-model="dateFrom" type="date" /></label>
+        <label class="planning-filter__label">По <UiInput v-model="dateTo" type="date" /></label>
+        <template v-if="groupOptions.length">
+          <label class="planning-filter__multi">
+            <span>Группы (проекты):</span>
+            <UiMultiSelect
+              v-model="selectedGroupIds"
+              :options="groupOptions"
+              placeholder="Поиск и выбор…"
+              style="min-width: 200px"
+            />
+          </label>
+        </template>
+        <UiCheckbox v-model="hideTasksWithoutPlan" class="planning-filter__checkbox">Скрыть задачи без планового времени</UiCheckbox>
+        <template v-if="taskUfCatalog.length">
+          <label class="planning-filter__label">
+            <span>Фильтр по полю</span>
+            <UiSelect v-model="filterUfFieldCode" style="min-width: 160px">
+              <option value="">— не фильтровать —</option>
+              <option v-for="f in taskUfCatalog" :key="f.field_code" :value="f.field_code">
+                {{ f.label || f.field_code }}
+              </option>
+            </UiSelect>
+          </label>
+          <label v-if="filterUfFieldCode" class="planning-filter__label">
+            <span>Значение</span>
+            <UiSelect v-model="filterUfValue" style="min-width: 120px">
+              <option value="">— любое —</option>
+              <option value="1">да (1)</option>
+              <option value="0">нет (0)</option>
+            </UiSelect>
+          </label>
+        </template>
+        <UiButton variant="primary" :disabled="loading" @click="loadGrid">
+          {{ loading ? 'Загрузка…' : 'Показать сетку' }}
+        </UiButton>
+      </section>
 
       <template v-if="gridData && !gridData.error">
         <h2 class="grid-section__title">Задачи и учёт времени по дням</h2>
-        <p class="muted grid-section__period">Период: {{ gridData.date_from }} — {{ gridData.date_to }}</p>
-        <p v-if="applyPlanError" class="error">{{ applyPlanError }}</p>
-        <p v-if="hasDraftPlans" class="draft-actions">
-          <button type="button" class="btn btn--primary" :disabled="applyPlanSaving" @click="applyDraftPlans">
+        <UiMuted tag="p" class="grid-section__period">Период: {{ gridData.date_from }} — {{ gridData.date_to }}</UiMuted>
+        <UiAlert v-if="applyPlanError" variant="error">{{ applyPlanError }}</UiAlert>
+        <p v-if="hasDraftPlans" class="planning-draft-actions">
+          <UiButton variant="primary" :disabled="applyPlanSaving" @click="applyDraftPlans">
             {{ applyPlanSaving ? 'Сохранение…' : 'Применить изменения плана' }}
-          </button>
-          <span class="muted">Несохранённые правки плановых полос (сдвиг/растягивание) будут сохранены на сервер.</span>
+          </UiButton>
+          <UiMuted>Несохранённые правки плановых полос (сдвиг/растягивание) будут сохранены на сервер.</UiMuted>
         </p>
       </template>
     </div>
@@ -851,78 +874,96 @@ onUnmounted(() => {
           </tbody>
         </table>
       </div>
-      <p v-if="filteredTasks.length === 0" class="muted">
+      <UiMuted v-if="filteredTasks.length === 0" tag="p">
         {{ gridData.tasks?.length === 0 ? 'Нет задач у выбранных специалистов за период. Запустите синхронизацию с Bitrix24.' : 'Нет задач с плановым временем. Снимите галочку «Скрыть задачи без планового времени», чтобы показать все.' }}
-      </p>
+      </UiMuted>
     </section>
 
-    <!-- Модалка переплана -->
-    <Teleport to="body">
-      <div v-if="showReplanModal" class="modal-overlay" @click.self="closeReplanModal">
-        <div class="modal-panel">
-          <h3 class="modal-title">Переплан задачи</h3>
-          <p v-if="replanTaskTitle" class="modal-task-title">{{ replanTaskTitle }}</p>
-          <p v-if="taskPlanError" class="error">{{ taskPlanError }}</p>
-          <template v-if="taskPlanLoading">
-            <p class="muted">Загрузка…</p>
-          </template>
-          <template v-else-if="taskPlanData">
-            <section class="replan-section">
-              <h4>Исходный план (только чтение)</h4>
-              <p class="replan-original">{{ originalHoursLabel(taskPlanData) }}</p>
-            </section>
-            <section class="replan-section">
-              <h4>Переплан</h4>
-              <div class="replan-dates">
-                <label>Начало <input v-model="replanForm.plan_start_date" type="date" class="input" /></label>
-                <label>Окончание <input v-model="replanForm.plan_end_date" type="date" class="input" /></label>
-              </div>
-              <p class="muted">Часы по дням (период сетки):</p>
-              <div class="replan-days-grid">
-                <template v-for="day in replanModalDays" :key="day">
-                  <label class="replan-day-cell" :class="{ 'replan-day-cell--weekend': isWeekend(day) }">
-                    <span class="replan-day-label">{{ day.slice(8, 10) }}.{{ day.slice(5, 7) }}</span>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.5"
-                      class="input input--hours"
-                      :value="getReplanHoursForDay(day)"
-                      @input="setReplanHoursForDay(day, ($event.target).value)"
-                    />
-                  </label>
-                </template>
-              </div>
-            </section>
-          </template>
-          <div class="modal-actions">
-            <button type="button" class="btn" @click="closeReplanModal">Отмена</button>
-            <button type="button" class="btn btn--primary" :disabled="taskPlanLoading || taskPlanSaving" @click="saveReplan">
-              {{ taskPlanSaving ? 'Сохранение…' : 'Сохранить' }}
-            </button>
+    <UiModal
+      :show="showReplanModal"
+      title="Переплан задачи"
+      @close="closeReplanModal"
+    >
+      <p v-if="replanTaskTitle" class="replan-task-title">{{ replanTaskTitle }}</p>
+      <UiAlert v-if="taskPlanError" variant="error">{{ taskPlanError }}</UiAlert>
+      <UiLoading v-if="taskPlanLoading" />
+      <template v-else-if="taskPlanData">
+        <section class="replan-section">
+          <h4>Исходный план (только чтение)</h4>
+          <p class="replan-original">{{ originalHoursLabel(taskPlanData) }}</p>
+        </section>
+        <section class="replan-section">
+          <h4>Переплан</h4>
+          <div class="replan-dates">
+            <label class="replan-dates__label">Начало <UiInput v-model="replanForm.plan_start_date" type="date" /></label>
+            <label class="replan-dates__label">Окончание <UiInput v-model="replanForm.plan_end_date" type="date" /></label>
           </div>
-        </div>
-      </div>
-    </Teleport>
+          <UiMuted tag="p">Часы по дням (период сетки):</UiMuted>
+          <div class="replan-days-grid">
+            <template v-for="day in replanModalDays" :key="day">
+              <label class="replan-day-cell" :class="{ 'replan-day-cell--weekend': isWeekend(day) }">
+                <span class="replan-day-label">{{ day.slice(8, 10) }}.{{ day.slice(5, 7) }}</span>
+                <UiInput
+                  type="number"
+                  :min="0"
+                  :step="0.5"
+                  :model-value="getReplanHoursForDay(day)"
+                  class="replan-day-input"
+                  @update:model-value="setReplanHoursForDay(day, $event)"
+                />
+              </label>
+            </template>
+          </div>
+        </section>
+      </template>
+      <template #actions>
+        <UiButton @click="closeReplanModal">Отмена</UiButton>
+        <UiButton variant="primary" :disabled="taskPlanLoading || taskPlanSaving" @click="saveReplan">
+          {{ taskPlanSaving ? 'Сохранение…' : 'Сохранить' }}
+        </UiButton>
+      </template>
+    </UiModal>
   </div>
 </template>
 
 <style lang="scss" scoped>
-.page__title { margin: 0 0 0.25rem; font-size: 1.5rem; }
-.page__desc { margin: 0 0 1rem; color: #64748b; font-size: 0.9rem; }
-.error { color: var(--color-error); margin-bottom: 1rem; }
-.muted { color: #94a3b8; font-size: 0.9rem; margin: 0.5rem 0; }
-.filter-section { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-start; margin-bottom: 1.5rem; }
-.filter-section label { display: flex; align-items: center; gap: 0.35rem; font-size: 0.9rem; }
-.filter-multi { flex-direction: column; align-items: flex-start; }
-.filter-checkbox { white-space: nowrap; }
-.input { padding: 0.4rem 0.6rem; border: 1px solid #cbd5e1; border-radius: 4px; }
-.btn { padding: 0.4rem 0.75rem; border: 1px solid #cbd5e1; border-radius: 4px; background: #fff; cursor: pointer; font-size: 0.9rem; }
-.btn--primary { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
-.btn:disabled { opacity: 0.7; cursor: not-allowed; }
+.planning-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-start;
+  margin-bottom: 1.5rem;
+}
+.planning-filter__label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+}
+.planning-filter__multi {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  font-size: 0.9rem;
+}
+.planning-filter__checkbox {
+  white-space: nowrap;
+  align-self: center;
+}
 .planning-above-table { margin-bottom: 0; }
 .planning-above-table .grid-section__title { margin: 1rem 0 0.25rem; font-size: 1.1rem; }
 .planning-above-table .grid-section__period { margin: 0 0 0.5rem; }
+.planning-draft-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.replan-task-title { margin: 0 0 0.5rem; font-size: 0.95rem; }
+.replan-dates { display: flex; gap: 1rem; margin-bottom: 0.5rem; }
+.replan-dates__label { display: flex; align-items: center; gap: 0.35rem; font-size: 0.9rem; }
+.replan-day-input { width: 2.8rem; text-align: center; padding: 0.25rem; box-sizing: border-box; }
 
 .grid-section { margin-top: 0; }
 .grid-section .table-scroll-wrap { margin-top: 0; }
@@ -1048,6 +1089,5 @@ onUnmounted(() => {
 .replan-day-cell { display: flex; flex-direction: column; align-items: center; gap: 0.2rem; padding: 0.35rem; border: 1px solid #e2e8f0; border-radius: 4px; min-width: 3rem; }
 .replan-day-cell--weekend { background: #f8fafc; }
 .replan-day-label { font-size: 0.75rem; color: #64748b; }
-.replan-day-cell .input--hours { width: 2.8rem; text-align: center; padding: 0.25rem; }
 .modal-actions { display: flex; gap: 0.75rem; justify-content: flex-end; margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid #e2e8f0; }
 </style>

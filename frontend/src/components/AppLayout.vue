@@ -10,6 +10,7 @@ import { RouterLink } from 'vue-router'
         <RouterLink to="/planning-grid" class="nav__link">Планирование</RouterLink>
         <RouterLink to="/dashboard" class="nav__link">Загрузка</RouterLink>
       </div>
+      <RouterLink to="/ui-showcase" class="nav__link nav__link--right">UI Showcase</RouterLink>
       <RouterLink to="/settings" class="nav__link nav__link--settings">Настройки</RouterLink>
     </nav>
     <main class="main">
@@ -53,10 +54,13 @@ import { RouterLink } from 'vue-router'
     color: #fff;
   }
 }
-.nav__link--settings {
+.nav__link--right {
   margin-left: 0.5rem;
   border-left: 1px solid #e2e8f0;
   padding-left: 0.75rem;
+}
+.nav__link--settings {
+  padding-left: 0.5rem;
 }
 .main {
   flex: 1;

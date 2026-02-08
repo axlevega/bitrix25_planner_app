@@ -1,6 +1,18 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { api } from '../api/client'
+import {
+  UiPageHeader,
+  UiAlert,
+  UiLoading,
+  UiTable,
+  UiCard,
+  UiInput,
+  UiSelect,
+  UiCheckbox,
+  UiButton,
+  UiMuted,
+} from '../components/ui'
 
 const { embedded } = defineProps({ embedded: { type: Boolean, default: false } })
 
@@ -108,209 +120,142 @@ onMounted(load)
 
 <template>
   <div class="page">
-    <template v-if="!embedded">
-      <h1 class="page__title">Специалисты</h1>
-      <p class="page__desc">Справочник специалистов для планирования: отдел, нормы часов, лимиты по флайтам. Создаётся вручную. Укажите <strong>Bitrix24 User ID</strong> (из синхронизации), чтобы задачи из Bitrix24 учитывались по этому специалисту при расчёте загрузки.</p>
-    </template>
+    <UiPageHeader
+      title="Специалисты"
+      :description="
+        embedded
+          ? 'Справочник специалистов: отдел, нормы часов, лимиты. Укажите Bitrix24 User ID для учёта задач при расчёте загрузки.'
+          : 'Справочник специалистов для планирования: отдел, нормы часов, лимиты по флайтам. Создаётся вручную. Укажите Bitrix24 User ID (из синхронизации), чтобы задачи из Bitrix24 учитывались по этому специалисту при расчёте загрузки.'
+      "
+      :size="embedded ? 'md' : 'lg'"
+    />
+
+    <UiAlert v-if="error" variant="error">{{ error }}</UiAlert>
+
+    <UiLoading v-if="loading" />
     <template v-else>
-      <h2 class="page__title page__title--tab">Специалисты</h2>
-      <p class="page__desc">Справочник специалистов: отдел, нормы часов, лимиты. Укажите Bitrix24 User ID для учёта задач при расчёте загрузки.</p>
-    </template>
+      <UiTable class="specialists__table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Имя</th>
+            <th>Отдел</th>
+            <th>B24 User ID</th>
+            <th>Норма ч/день</th>
+            <th>Норма ч/нед</th>
+            <th>Лимит флайт ч/день</th>
+            <th>Лимит флайт ч/нед</th>
+            <th>Активен</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="row in items" :key="row.id">
+            <td>{{ row.id }}</td>
+            <td>{{ row.name }}</td>
+            <td>{{ departmentMap[row.department_id] || '—' }}</td>
+            <td>{{ row.bitrix24_user_id || '—' }}</td>
+            <td>{{ row.norm_hours_per_day ?? '—' }}</td>
+            <td>{{ row.norm_hours_per_week ?? '—' }}</td>
+            <td>{{ row.flight_hours_limit_per_day ?? '—' }}</td>
+            <td>{{ row.flight_hours_limit_per_week ?? '—' }}</td>
+            <td>{{ row.is_active ? 'Да' : 'Нет' }}</td>
+            <td>
+              <UiButton size="sm" @click="openEdit(row)">Изменить</UiButton>
+            </td>
+          </tr>
+        </tbody>
+      </UiTable>
+      <UiMuted v-if="items.length === 0" tag="p" class="specialists__empty">Нет специалистов. Добавьте первого ниже.</UiMuted>
 
-    <p v-if="error" class="error">{{ error }}</p>
-
-    <div v-if="loading" class="loading">Загрузка…</div>
-    <template v-else>
-      <div class="table-wrap">
-        <table class="table">
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Имя</th>
-              <th>Отдел</th>
-              <th>B24 User ID</th>
-              <th>Норма ч/день</th>
-              <th>Норма ч/нед</th>
-              <th>Лимит флайт ч/день</th>
-              <th>Лимит флайт ч/нед</th>
-              <th>Активен</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="row in items" :key="row.id">
-              <td>{{ row.id }}</td>
-              <td>{{ row.name }}</td>
-              <td>{{ departmentMap[row.department_id] || '—' }}</td>
-              <td>{{ row.bitrix24_user_id || '—' }}</td>
-              <td>{{ row.norm_hours_per_day ?? '—' }}</td>
-              <td>{{ row.norm_hours_per_week ?? '—' }}</td>
-              <td>{{ row.flight_hours_limit_per_day ?? '—' }}</td>
-              <td>{{ row.flight_hours_limit_per_week ?? '—' }}</td>
-              <td>{{ row.is_active ? 'Да' : 'Нет' }}</td>
-              <td>
-                <button type="button" class="btn btn--sm" @click="openEdit(row)">Изменить</button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <p v-if="items.length === 0" class="muted">Нет специалистов. Добавьте первого ниже.</p>
-
-      <section class="form-section">
-        <h2>{{ form.id ? 'Редактирование' : 'Новый специалист' }}</h2>
-        <form class="form form--grid" @submit.prevent="save">
-          <label>
+      <UiCard tag="section" class="specialists__form-card">
+        <h2 class="specialists__form-title">{{ form.id ? 'Редактирование' : 'Новый специалист' }}</h2>
+        <form class="specialists__form" @submit.prevent="save">
+          <label class="specialists__field">
             <span>Имя *</span>
-            <input v-model="form.name" type="text" class="input" required />
+            <UiInput v-model="form.name" required />
           </label>
-          <label>
+          <label class="specialists__field">
             <span>Отдел</span>
-            <select v-model="form.department_id" class="input">
+            <UiSelect v-model="form.department_id">
               <option value="">— не выбран —</option>
               <option v-for="d in departments" :key="d.id" :value="d.id">{{ d.name }}</option>
-            </select>
+            </UiSelect>
           </label>
-          <label>
+          <label class="specialists__field">
             <span>Bitrix24 User ID</span>
-            <input v-model="form.bitrix24_user_id" type="text" class="input" placeholder="из B24" />
+            <UiInput v-model="form.bitrix24_user_id" placeholder="из B24" />
           </label>
-          <label>
+          <label class="specialists__field">
             <span>Норма ч/день</span>
-            <input v-model.number="form.norm_hours_per_day" type="number" step="0.5" min="0" class="input" />
+            <UiInput v-model="form.norm_hours_per_day" type="number" step="0.5" min="0" />
           </label>
-          <label>
+          <label class="specialists__field">
             <span>Норма ч/неделя</span>
-            <input v-model.number="form.norm_hours_per_week" type="number" step="0.5" min="0" class="input" />
+            <UiInput v-model="form.norm_hours_per_week" type="number" step="0.5" min="0" />
           </label>
-          <label>
+          <label class="specialists__field">
             <span>Лимит флайт ч/день</span>
-            <input v-model.number="form.flight_hours_limit_per_day" type="number" step="0.5" min="0" class="input" />
+            <UiInput v-model="form.flight_hours_limit_per_day" type="number" step="0.5" min="0" />
           </label>
-          <label>
+          <label class="specialists__field">
             <span>Лимит флайт ч/неделя</span>
-            <input v-model.number="form.flight_hours_limit_per_week" type="number" step="0.5" min="0" class="input" />
+            <UiInput v-model="form.flight_hours_limit_per_week" type="number" step="0.5" min="0" />
           </label>
-          <label class="form__checkbox">
-            <input v-model="form.is_active" type="checkbox" :true-value="1" :false-value="0" />
-            <span>Активен</span>
-          </label>
-          <div class="form__actions">
-            <button type="submit" class="btn btn--primary" :disabled="saving">
+          <div class="specialists__checkbox-wrap">
+            <UiCheckbox
+              :model-value="!!form.is_active"
+              @update:model-value="form.is_active = $event ? 1 : 0"
+            >
+              Активен
+            </UiCheckbox>
+          </div>
+          <div class="specialists__actions">
+            <UiButton type="submit" variant="primary" :disabled="saving">
               {{ saving ? 'Сохранение…' : (form.id ? 'Сохранить' : 'Добавить') }}
-            </button>
-            <button v-if="form.id" type="button" class="btn" @click="clearForm">Отмена</button>
+            </UiButton>
+            <UiButton v-if="form.id" type="button" @click="clearForm">Отмена</UiButton>
           </div>
         </form>
-      </section>
+      </UiCard>
     </template>
   </div>
 </template>
 
 <style lang="scss" scoped>
-.page__title {
-  margin: 0 0 0.25rem;
-  font-size: 1.5rem;
-}
-.page__title--tab {
-  font-size: 1.2rem;
-  margin-bottom: 0.5rem;
-}
-.page__desc {
-  margin: 0 0 1rem;
-  color: #64748b;
-  font-size: 0.9rem;
-}
-.error {
-  color: var(--color-error);
-  margin-bottom: 1rem;
-}
-.loading {
-  color: #64748b;
-}
-.table-wrap {
-  overflow-x: auto;
-  margin-bottom: 1.5rem;
-}
-.table {
-  width: 100%;
+.specialists__table :deep(.ui-table) {
   min-width: 800px;
-  border-collapse: collapse;
-  background: #fff;
-  border-radius: 8px;
-  overflow: hidden;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-}
-.table th,
-.table td {
-  padding: 0.5rem 0.6rem;
-  text-align: left;
-  border-bottom: 1px solid #e2e8f0;
   font-size: 0.85rem;
 }
-.table th {
-  background: #f8fafc;
-  font-weight: 600;
+.specialists__table :deep(th),
+.specialists__table :deep(td) {
+  padding: 0.5rem 0.6rem;
 }
-.muted {
-  color: #64748b;
+.specialists__empty {
   margin-bottom: 1.5rem;
 }
-.form-section {
-  background: #fff;
-  padding: 1rem;
-  border-radius: 8px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-}
-.form-section h2 {
+.specialists__form-card :deep(h2) {
   margin: 0 0 0.75rem;
   font-size: 1.1rem;
 }
-.form--grid {
+.specialists__form {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 0.75rem;
   align-items: end;
 }
-.form--grid label {
+.specialists__field {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
   font-size: 0.85rem;
 }
-.form__checkbox {
-  flex-direction: row;
-  align-items: center;
+.specialists__checkbox-wrap {
+  align-self: center;
 }
-.form__actions {
+.specialists__actions {
   grid-column: 1 / -1;
   display: flex;
   gap: 0.5rem;
-}
-.input {
-  padding: 0.4rem 0.6rem;
-  border: 1px solid #cbd5e1;
-  border-radius: 4px;
-}
-.btn {
-  padding: 0.4rem 0.75rem;
-  border: 1px solid #cbd5e1;
-  border-radius: 4px;
-  background: #fff;
-  cursor: pointer;
-  font-size: 0.9rem;
-}
-.btn--sm {
-  padding: 0.25rem 0.5rem;
-  font-size: 0.85rem;
-}
-.btn--primary {
-  background: var(--color-primary);
-  color: #fff;
-  border-color: var(--color-primary);
-}
-.btn:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
 }
 </style>
