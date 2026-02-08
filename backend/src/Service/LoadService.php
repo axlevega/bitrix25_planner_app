@@ -235,6 +235,149 @@ final class LoadService
         return round($total, 2);
     }
 
+    /**
+     * План по дням за период для одного специалиста (дата => часы). Для графика.
+     *
+     * @return array<string, float> Y-m-d => hours
+     */
+    public function getPlanHoursByDateMap(string $bitrix24UserId, string $dateFrom, string $dateTo): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT bitrix24_task_id, time_estimate, start_date_plan, end_date_plan, created_date, deadline
+             FROM bitrix24_tasks_cache WHERE responsible_user_id = ?'
+        );
+        $stmt->execute([$bitrix24UserId]);
+        $tasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        if ($tasks === []) {
+            return $this->allDatesZero($dateFrom, $dateTo);
+        }
+        $taskIds = array_column($tasks, 'bitrix24_task_id');
+        $ph = implode(',', array_fill(0, count($taskIds), '?'));
+        $overrides = [];
+        $overrideStmt = $this->pdo->prepare("SELECT bitrix24_task_id, plan_start_date, plan_end_date, original_plan_start, original_plan_end, original_time_estimate FROM task_plan_override WHERE bitrix24_task_id IN ($ph)");
+        $overrideStmt->execute($taskIds);
+        while ($row = $overrideStmt->fetch(PDO::FETCH_ASSOC)) {
+            $overrides[$row['bitrix24_task_id']] = $row;
+        }
+        $dailyByTask = [];
+        $dailyStmt = $this->pdo->prepare("SELECT bitrix24_task_id, plan_date, planned_hours FROM task_plan_daily WHERE bitrix24_task_id IN ($ph) AND plan_date >= ? AND plan_date <= ?");
+        $dailyStmt->execute(array_merge($taskIds, [$dateFrom, $dateTo]));
+        while ($row = $dailyStmt->fetch(PDO::FETCH_ASSOC)) {
+            $tid = $row['bitrix24_task_id'];
+            $dailyByTask[$tid][$row['plan_date']] = (float) $row['planned_hours'];
+        }
+        $intervalsByTask = [];
+        $intStmt = $this->pdo->prepare("SELECT bitrix24_task_id, date_from, date_to, hours_per_day, sort_order FROM task_plan_intervals WHERE bitrix24_task_id IN ($ph) ORDER BY bitrix24_task_id, sort_order");
+        $intStmt->execute($taskIds);
+        while ($row = $intStmt->fetch(PDO::FETCH_ASSOC)) {
+            $tid = $row['bitrix24_task_id'];
+            $intervalsByTask[$tid][] = [
+                'date_from' => $row['date_from'],
+                'date_to' => $row['date_to'],
+                'hours_per_day' => (float) $row['hours_per_day'],
+            ];
+        }
+        $byDate = $this->allDatesZero($dateFrom, $dateTo);
+        foreach ($tasks as $task) {
+            $tid = $task['bitrix24_task_id'];
+            $override = $overrides[$tid] ?? null;
+            $dailyMap = $dailyByTask[$tid] ?? [];
+            $intervals = $intervalsByTask[$tid] ?? [];
+            if ($intervals !== []) {
+                $taskByDate = $this->computePlanHoursByDateFromIntervals($intervals, $dateFrom, $dateTo);
+            } else {
+                if ($override !== null) {
+                    $replanStart = $override['plan_start_date'] ?? $override['original_plan_start'] ?? null;
+                    $replanEnd = $override['plan_end_date'] ?? $override['original_plan_end'] ?? null;
+                    $taskByDate = $this->computePlanHoursByDateWithRange(
+                        $replanStart,
+                        $replanEnd,
+                        (int) ($task['time_estimate'] ?? 0),
+                        $dateFrom,
+                        $dateTo
+                    );
+                } else {
+                    $taskByDate = $this->computePlanHoursByDate($task, $dateFrom, $dateTo);
+                }
+                foreach ($dailyMap as $d => $h) {
+                    $taskByDate[$d] = round($h, 3);
+                }
+            }
+            foreach ($taskByDate as $d => $h) {
+                $byDate[$d] = ($byDate[$d] ?? 0) + $h;
+            }
+        }
+        foreach ($byDate as $d => $h) {
+            $byDate[$d] = round($h, 2);
+        }
+        return $byDate;
+    }
+
+    /**
+     * Данные для линейного графика нагрузки по сотрудникам: плановые часы по дням.
+     * Возвращает labels (даты) и datasets (по одному на специалиста) с массивом часов по дням.
+     *
+     * @return array{labels: list<string>, datasets: list<array{specialist_id: int, specialist_name: string, data: list<float>}>}
+     */
+    public function getLoadChartPlan(string $dateFrom, string $dateTo, ?int $specialistId, ?int $departmentId): array
+    {
+        $labels = $this->dateRange($dateFrom, $dateTo);
+        $specialists = [];
+        if ($specialistId > 0) {
+            $stmt = $this->pdo->prepare('SELECT id, name, bitrix24_user_id FROM specialists WHERE id = ?');
+            $stmt->execute([$specialistId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($row) {
+                $specialists[] = $row;
+            }
+        } elseif ($departmentId > 0) {
+            $stmt = $this->pdo->prepare('SELECT id, name, bitrix24_user_id FROM specialists WHERE department_id = ? AND is_active = 1 ORDER BY name');
+            $stmt->execute([$departmentId]);
+            $specialists = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        }
+        $datasets = [];
+        foreach ($specialists as $spec) {
+            $b24UserId = $spec['bitrix24_user_id'] ?? '';
+            $byDate = $b24UserId !== '' ? $this->getPlanHoursByDateMap($b24UserId, $dateFrom, $dateTo) : $this->allDatesZero($dateFrom, $dateTo);
+            $data = [];
+            foreach ($labels as $d) {
+                $data[] = $byDate[$d] ?? 0.0;
+            }
+            $datasets[] = [
+                'specialist_id' => (int) $spec['id'],
+                'specialist_name' => $spec['name'] ?? '',
+                'data' => $data,
+            ];
+        }
+        return ['labels' => $labels, 'datasets' => $datasets];
+    }
+
+    /** @return list<string> Y-m-d от dateFrom до dateTo включительно */
+    private function dateRange(string $dateFrom, string $dateTo): array
+    {
+        $start = strtotime($dateFrom);
+        $end = strtotime($dateTo);
+        if ($start === false || $end === false || $start > $end) {
+            return [];
+        }
+        $out = [];
+        for ($t = $start; $t <= $end; $t += 86400) {
+            $out[] = date('Y-m-d', $t);
+        }
+        return $out;
+    }
+
+    /** @return array<string, float> все даты периода с 0 */
+    private function allDatesZero(string $dateFrom, string $dateTo): array
+    {
+        $labels = $this->dateRange($dateFrom, $dateTo);
+        $out = [];
+        foreach ($labels as $d) {
+            $out[$d] = 0.0;
+        }
+        return $out;
+    }
+
     private function computePlanHoursByDate(array $task, string $periodFrom, string $periodTo): array
     {
         $planStart = $this->dateOnly($task['start_date_plan'] ?? null) ?? $this->dateOnly($task['created_date'] ?? null);

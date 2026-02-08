@@ -704,6 +704,23 @@ final class Application
             return ['error' => 'specialist_id or department_id required'];
         });
 
+        // Данные для графика нагрузки по дням (план по сотрудникам): date_from, date_to, specialist_id? | department_id?
+        $this->router->get('/load-chart', function (array $payload): array {
+            $pdo = Database::getConnection();
+            $specialistId = isset($payload['specialist_id']) ? (int) $payload['specialist_id'] : 0;
+            $departmentId = isset($payload['department_id']) ? (int) $payload['department_id'] : 0;
+            $dateFrom = trim((string) ($payload['date_from'] ?? ''));
+            $dateTo = trim((string) ($payload['date_to'] ?? ''));
+            if ($dateFrom === '' || $dateTo === '') {
+                return ['error' => 'date_from and date_to required', 'labels' => [], 'datasets' => []];
+            }
+            if ($specialistId <= 0 && $departmentId <= 0) {
+                return ['error' => 'specialist_id or department_id required', 'labels' => [], 'datasets' => []];
+            }
+            $service = new LoadService($pdo);
+            return $service->getLoadChartPlan($dateFrom, $dateTo, $specialistId > 0 ? $specialistId : null, $departmentId > 0 ? $departmentId : null);
+        });
+
         // Ручной запуск синхронизации: один чанк за запрос; фронт вызывает в цикле пока has_more. mode: full|tasks|users (всегда полная)
         $this->router->post('/sync', function (array $payload): array {
             set_time_limit(60);

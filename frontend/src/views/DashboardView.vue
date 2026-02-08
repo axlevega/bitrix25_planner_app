@@ -1,5 +1,6 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch, onBeforeUnmount, nextTick } from 'vue'
+import { Chart } from 'chart.js/auto'
 import { api } from '../api/client'
 import {
   UiPageHeader,
@@ -12,6 +13,13 @@ import {
   UiTable,
   UiStatus,
 } from '../components/ui'
+
+const chartCanvasRef = ref(null)
+let chartInstance = null
+const lineChartCanvasRef = ref(null)
+let lineChartInstance = null
+const loadChartData = ref(null)
+const loadChartLoading = ref(false)
 
 const specialists = ref([])
 const departments = ref([])
@@ -77,6 +85,16 @@ async function loadLoad() {
     if (loadType.value === 'specialist') params.specialist_id = id
     else params.department_id = id
     loadResult.value = await api.load(params)
+    loadChartData.value = null
+    loadChartLoading.value = true
+    try {
+      const chartRes = await api.loadChart(params)
+      if (!chartRes.error && chartRes.labels && chartRes.datasets) {
+        loadChartData.value = { labels: chartRes.labels, datasets: chartRes.datasets }
+      }
+    } finally {
+      loadChartLoading.value = false
+    }
   } catch (e) {
     error.value = e.message
   } finally {
@@ -92,7 +110,171 @@ const statusVariant = computed(() => {
   return 'normal'
 })
 
+function buildChartData() {
+  const r = loadResult.value
+  if (!r || r.error) return null
+  const labels = ['Запланировано', 'Выработано']
+  const data = [Number(r.hours_plan) || 0, Number(r.hours_tasks) || 0]
+  if (r.norm_hours != null) {
+    labels.push('Норма за период')
+    data.push(Number(r.norm_hours))
+  }
+  return { labels, data }
+}
+
+function updateChart() {
+  if (!chartCanvasRef.value) return
+  const payload = buildChartData()
+  if (!payload) return
+  if (chartInstance) {
+    chartInstance.destroy()
+    chartInstance = null
+  }
+  chartInstance = new Chart(chartCanvasRef.value, {
+    type: 'bar',
+    data: {
+      labels: payload.labels,
+      datasets: [
+        {
+          label: 'Часы',
+          data: payload.data,
+          backgroundColor: [
+            'rgba(59, 130, 246, 0.7)',
+            'rgba(34, 197, 94, 0.7)',
+            'rgba(148, 163, 184, 0.7)',
+          ],
+          borderColor: ['rgb(59, 130, 246)', 'rgb(34, 197, 94)', 'rgb(148, 163, 184)'],
+          borderWidth: 1,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => ` ${ctx.raw} ч`,
+          },
+        },
+      },
+      scales: {
+        y: {
+          beginAtZero: true,
+          title: { display: true, text: 'Часы' },
+          ticks: { callback: (v) => v + ' ч' },
+        },
+      },
+    },
+  })
+}
+
+const LINE_CHART_COLORS = [
+  'rgb(59, 130, 246)',
+  'rgb(34, 197, 94)',
+  'rgb(234, 88, 12)',
+  'rgb(168, 85, 247)',
+  'rgb(236, 72, 153)',
+  'rgb(14, 165, 233)',
+  'rgb(132, 204, 22)',
+  'rgb(251, 146, 60)',
+  'rgb(99, 102, 241)',
+  'rgb(20, 184, 166)',
+]
+
+function formatChartDate(ymd) {
+  if (!ymd || ymd.length < 10) return ymd
+  const [y, m, d] = ymd.split('-')
+  return `${d}.${m}`
+}
+
+function updateLineChart() {
+  if (!lineChartCanvasRef.value || !loadChartData.value) return
+  const { labels, datasets } = loadChartData.value
+  if (!labels.length) return
+  if (lineChartInstance) {
+    lineChartInstance.destroy()
+    lineChartInstance = null
+  }
+  const chartDatasets = datasets.map((ds, i) => ({
+    label: ds.specialist_name || `Специалист ${i + 1}`,
+    data: ds.data,
+    borderColor: LINE_CHART_COLORS[i % LINE_CHART_COLORS.length],
+    backgroundColor: 'transparent',
+    borderWidth: 2,
+    tension: 0.2,
+    pointRadius: labels.length > 31 ? 0 : 2,
+  }))
+  lineChartInstance = new Chart(lineChartCanvasRef.value, {
+    type: 'line',
+    data: {
+      labels: labels.map(formatChartDate),
+      datasets: chartDatasets,
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { position: 'top' },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => ` ${ctx.dataset.label}: ${ctx.raw} ч`,
+          },
+        },
+      },
+      scales: {
+        y: {
+          beginAtZero: true,
+          title: { display: true, text: 'Часы' },
+          ticks: { callback: (v) => v + ' ч' },
+        },
+        x: {
+          title: { display: true, text: 'Дата' },
+          ticks: {
+            maxRotation: 45,
+            maxTicksLimit: labels.length > 31 ? 15 : 25,
+          },
+        },
+      },
+    },
+  })
+}
+
+watch(loadResult, async (val) => {
+  if (chartInstance) {
+    chartInstance.destroy()
+    chartInstance = null
+  }
+  if (val && !val.error) {
+    await nextTick()
+    updateChart()
+  }
+}, { immediate: false })
+
+watch(loadChartData, async (val) => {
+  if (lineChartInstance) {
+    lineChartInstance.destroy()
+    lineChartInstance = null
+  }
+  if (val && val.labels?.length) {
+    await nextTick()
+    updateLineChart()
+  }
+}, { immediate: false })
+
 onMounted(loadRefs)
+onBeforeUnmount(() => {
+  if (chartInstance) {
+    chartInstance.destroy()
+    chartInstance = null
+  }
+  if (lineChartInstance) {
+    lineChartInstance.destroy()
+    lineChartInstance = null
+  }
+})
 </script>
 
 <template>
@@ -135,6 +317,16 @@ onMounted(loadRefs)
       <p><strong>Выработано:</strong> {{ loadResult.hours_tasks }} <span class="dashboard-result__hint">— факт</span></p>
       <p v-if="loadResult.norm_hours != null"><strong>Норма за период:</strong> {{ loadResult.norm_hours }}</p>
       <p><strong>Статус загрузки:</strong> <UiStatus :variant="statusVariant" /></p>
+      <div class="dashboard-result__chart-wrap">
+        <canvas ref="chartCanvasRef"></canvas>
+      </div>
+      <div class="dashboard-result__line-chart-section">
+        <h3 class="dashboard-result__subtitle">Нагрузка по дням (план)</h3>
+        <p v-if="loadChartLoading" class="dashboard-result__chart-loading">Загрузка графика…</p>
+        <div v-else-if="loadChartData?.labels?.length" class="dashboard-result__line-chart-wrap">
+          <canvas ref="lineChartCanvasRef"></canvas>
+        </div>
+      </div>
       <div v-if="loadResult.specialists && loadResult.specialists.length" class="dashboard-result__table-wrap">
         <h3 class="dashboard-result__subtitle">По специалистам отдела</h3>
         <UiTable>
@@ -188,6 +380,32 @@ onMounted(loadRefs)
 .dashboard-result__hint {
   font-size: 0.85em;
   color: var(--color-muted, #64748b);
+}
+.dashboard-result__chart-wrap {
+  margin-top: 1.5rem;
+  height: 260px;
+  position: relative;
+}
+.dashboard-result__chart-wrap canvas {
+  max-width: 100%;
+}
+.dashboard-result__line-chart-section {
+  margin-top: 2rem;
+}
+.dashboard-result__line-chart-section .dashboard-result__subtitle {
+  margin-bottom: 0.5rem;
+}
+.dashboard-result__chart-loading {
+  margin: 0.5rem 0;
+  color: var(--color-muted, #64748b);
+  font-size: 0.9rem;
+}
+.dashboard-result__line-chart-wrap {
+  height: 320px;
+  position: relative;
+}
+.dashboard-result__line-chart-wrap canvas {
+  max-width: 100%;
 }
 .dashboard-result__table-wrap {
   margin-top: 1rem;

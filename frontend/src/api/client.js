@@ -62,6 +62,7 @@ export const api = {
   },
   sync: (mode = 'full') => api.post('/sync', { mode }),
   load: (params) => api.get('/load', params),
+  loadChart: (params) => api.get('/load-chart', params),
   // Сетка планирования: задачи + учёт времени по дням из B24
   planningGrid: (params) => api.get('/planning-grid', params),
   // Группы задач B24 (проекты) для фильтра в сетке планирования
