@@ -415,6 +415,7 @@ final class Application
 
             $overrides = [];
             $dailyByTask = [];
+            $intervalsByTask = [];
             if ($tasks !== []) {
                 $stmt = $pdo->prepare("SELECT bitrix24_task_id, plan_start_date, plan_end_date, original_plan_start, original_plan_end, original_time_estimate FROM task_plan_override WHERE bitrix24_task_id IN ($phTask)");
                 $stmt->execute($taskIdsInPeriod);
@@ -430,12 +431,26 @@ final class Application
                     }
                     $dailyByTask[$tid][$row['plan_date']] = (float) $row['planned_hours'];
                 }
+                $stmt = $pdo->prepare("SELECT bitrix24_task_id, date_from, date_to, hours_per_day, sort_order FROM task_plan_intervals WHERE bitrix24_task_id IN ($phTask) ORDER BY bitrix24_task_id, sort_order");
+                $stmt->execute($taskIdsInPeriod);
+                while ($row = $stmt->fetch(\PDO::FETCH_ASSOC)) {
+                    $tid = $row['bitrix24_task_id'];
+                    if (!isset($intervalsByTask[$tid])) {
+                        $intervalsByTask[$tid] = [];
+                    }
+                    $intervalsByTask[$tid][] = [
+                        'date_from' => $row['date_from'],
+                        'date_to' => $row['date_to'],
+                        'hours_per_day' => (float) $row['hours_per_day'],
+                    ];
+                }
             }
 
             foreach ($tasks as &$task) {
                 $tid = $task['bitrix24_task_id'];
                 $override = $overrides[$tid] ?? null;
                 $dailyMap = $dailyByTask[$tid] ?? [];
+                $intervals = $intervalsByTask[$tid] ?? [];
                 $task['has_plan_override'] = $override !== null;
                 if ($override !== null) {
                     $task['original_plan_hours_by_date'] = self::computePlanHoursByDateWithRange(
@@ -458,9 +473,13 @@ final class Application
                     $task['original_plan_hours_by_date'] = [];
                     $baseReplan = self::computePlanHoursByDate($task, $dateFrom, $dateTo);
                 }
-                $task['plan_hours_by_date'] = $baseReplan;
-                foreach ($dailyMap as $d => $h) {
-                    $task['plan_hours_by_date'][$d] = round($h, 1);
+                if ($intervals !== []) {
+                    $task['plan_hours_by_date'] = self::computePlanHoursByDateFromIntervals($intervals, $dateFrom, $dateTo);
+                } else {
+                    $task['plan_hours_by_date'] = $baseReplan;
+                    foreach ($dailyMap as $d => $h) {
+                        $task['plan_hours_by_date'][$d] = round($h, 1);
+                    }
                 }
                 // Факт: из кэша или сумма из bitrix24_task_elapsed (минуты)
                 if ($task['time_spent'] === null || $task['time_spent'] === '') {
@@ -518,11 +537,39 @@ final class Application
             $override = $pdo->prepare("SELECT plan_start_date, plan_end_date, original_plan_start, original_plan_end, original_time_estimate FROM task_plan_override WHERE bitrix24_task_id = ?");
             $override->execute([$taskId]);
             $override = $override->fetch(\PDO::FETCH_ASSOC);
-            $daily = $pdo->prepare("SELECT plan_date, planned_hours FROM task_plan_daily WHERE bitrix24_task_id = ? ORDER BY plan_date");
-            $daily->execute([$taskId]);
+            $intervalsStmt = $pdo->prepare("SELECT date_from, date_to, hours_per_day, sort_order FROM task_plan_intervals WHERE bitrix24_task_id = ? ORDER BY sort_order");
+            $intervalsStmt->execute([$taskId]);
+            $planIntervals = [];
+            while ($row = $intervalsStmt->fetch(\PDO::FETCH_ASSOC)) {
+                $planIntervals[] = [
+                    'date_from' => $row['date_from'],
+                    'date_to' => $row['date_to'],
+                    'hours_per_day' => (float) $row['hours_per_day'],
+                ];
+            }
             $planHoursByDate = [];
-            while ($row = $daily->fetch(\PDO::FETCH_ASSOC)) {
-                $planHoursByDate[$row['plan_date']] = (float) $row['planned_hours'];
+            if ($planIntervals !== []) {
+                $periodFrom = null;
+                $periodTo = null;
+                foreach ($planIntervals as $int) {
+                    $dFrom = $int['date_from'] ?? null;
+                    $dTo = $int['date_to'] ?? null;
+                    if ($dFrom !== null && ($periodFrom === null || $dFrom < $periodFrom)) {
+                        $periodFrom = $dFrom;
+                    }
+                    if ($dTo !== null && ($periodTo === null || $dTo > $periodTo)) {
+                        $periodTo = $dTo;
+                    }
+                }
+                $periodFrom = $periodFrom ?? '2000-01-01';
+                $periodTo = $periodTo ?? '2099-12-31';
+                $planHoursByDate = self::computePlanHoursByDateFromIntervals($planIntervals, $periodFrom, $periodTo);
+            } else {
+                $daily = $pdo->prepare("SELECT plan_date, planned_hours FROM task_plan_daily WHERE bitrix24_task_id = ? ORDER BY plan_date");
+                $daily->execute([$taskId]);
+                while ($row = $daily->fetch(\PDO::FETCH_ASSOC)) {
+                    $planHoursByDate[$row['plan_date']] = (float) $row['planned_hours'];
+                }
             }
             $original = [
                 'plan_start' => ($override !== null ? $override['original_plan_start'] : null) ?? self::dateOnly($task['start_date_plan'] ?? null) ?? self::dateOnly($task['created_date'] ?? null),
@@ -530,14 +577,15 @@ final class Application
                 'time_estimate' => $override !== null ? (int) $override['original_time_estimate'] : (int) $task['time_estimate'],
             ];
             $replanned = [
-                'plan_start' => $override['plan_start_date'] ?? $original['plan_start'],
-                'plan_end' => $override['plan_end_date'] ?? $original['plan_end'],
+                'plan_start' => $override['plan_start_date'] ?? $original['plan_start'] ?? null,
+                'plan_end' => $override['plan_end_date'] ?? $original['plan_end'] ?? null,
                 'plan_hours_by_date' => $planHoursByDate,
+                'plan_intervals' => $planIntervals,
             ];
             return ['task' => $task, 'original' => $original, 'replanned' => $replanned, 'has_plan_override' => $override !== null];
         });
 
-        // PUT task-plan: сохранение переплана (body: bitrix24_task_id, plan_start_date?, plan_end_date?, plan_hours_by_date?)
+        // PUT task-plan: сохранение переплана (body: bitrix24_task_id, plan_start_date?, plan_end_date?, plan_hours_by_date? | plan_intervals?)
         $this->router->put('/task-plan', function (array $payload): array {
             $pdo = Database::getConnection();
             $taskId = trim((string) ($payload['bitrix24_task_id'] ?? ''));
@@ -549,12 +597,6 @@ final class Application
             $task = $task->fetch(\PDO::FETCH_ASSOC);
             if (!$task) {
                 return ['error' => 'Task not found'];
-            }
-            $planStart = self::dateOnly($payload['plan_start_date'] ?? null);
-            $planEnd = self::dateOnly($payload['plan_end_date'] ?? null);
-            $planHoursByDate = $payload['plan_hours_by_date'] ?? [];
-            if (!is_array($planHoursByDate)) {
-                $planHoursByDate = [];
             }
 
             $override = $pdo->prepare("SELECT original_plan_start, original_plan_end, original_time_estimate FROM task_plan_override WHERE bitrix24_task_id = ?");
@@ -570,28 +612,73 @@ final class Application
                 $originalEnd = $override['original_plan_end'];
                 $originalEst = (int) $override['original_time_estimate'];
             }
-            if ($planStart === null) {
-                $planStart = $originalStart;
-            }
-            if ($planEnd === null) {
-                $planEnd = $originalEnd;
-            }
 
-            $pdo->prepare("INSERT INTO task_plan_override (bitrix24_task_id, plan_start_date, plan_end_date, original_plan_start, original_plan_end, original_time_estimate) VALUES (?, ?, ?, ?, ?, ?)
-                ON DUPLICATE KEY UPDATE plan_start_date = VALUES(plan_start_date), plan_end_date = VALUES(plan_end_date)")
-                ->execute([$taskId, $planStart, $planEnd, $originalStart, $originalEnd, $originalEst]);
-
-            $pdo->prepare("DELETE FROM task_plan_daily WHERE bitrix24_task_id = ?")->execute([$taskId]);
-            $ins = $pdo->prepare("INSERT INTO task_plan_daily (bitrix24_task_id, plan_date, planned_hours) VALUES (?, ?, ?)");
-            foreach ($planHoursByDate as $date => $hours) {
-                if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) $date)) {
-                    continue;
+            $planIntervals = $payload['plan_intervals'] ?? null;
+            if (is_array($planIntervals)) {
+                if ($planIntervals === []) {
+                    // Пользователь очистил все интервалы — удаляем интервалы и daily
+                    $pdo->prepare("DELETE FROM task_plan_intervals WHERE bitrix24_task_id = ?")->execute([$taskId]);
+                    $pdo->prepare("DELETE FROM task_plan_daily WHERE bitrix24_task_id = ?")->execute([$taskId]);
+                    return ['success' => true, 'bitrix24_task_id' => $taskId];
                 }
-                $h = (float) $hours;
-                if ($h < 0) {
-                    continue;
+                // Сохранение по интервалам (непустой массив)
+                $pdo->prepare("DELETE FROM task_plan_intervals WHERE bitrix24_task_id = ?")->execute([$taskId]);
+                $insInterval = $pdo->prepare("INSERT INTO task_plan_intervals (bitrix24_task_id, date_from, date_to, hours_per_day, sort_order) VALUES (?, ?, ?, ?, ?)");
+                $planStart = null;
+                $planEnd = null;
+                $sortOrder = 0;
+                foreach ($planIntervals as $int) {
+                    $dateFrom = self::dateOnly($int['date_from'] ?? null);
+                    $dateTo = self::dateOnly($int['date_to'] ?? null);
+                    $hoursPerDay = isset($int['hours_per_day']) ? (float) $int['hours_per_day'] : 0;
+                    if ($dateFrom === null || $dateTo === null || $hoursPerDay < 0) {
+                        continue;
+                    }
+                    if ($dateFrom > $dateTo) {
+                        [$dateFrom, $dateTo] = [$dateTo, $dateFrom];
+                    }
+                    $insInterval->execute([$taskId, $dateFrom, $dateTo, $hoursPerDay, $sortOrder]);
+                    $sortOrder++;
+                    if ($planStart === null || $dateFrom < $planStart) {
+                        $planStart = $dateFrom;
+                    }
+                    if ($planEnd === null || $dateTo > $planEnd) {
+                        $planEnd = $dateTo;
+                    }
                 }
-                $ins->execute([$taskId, $date, $h]);
+                $planStart = $planStart ?? $originalStart;
+                $planEnd = $planEnd ?? $originalEnd;
+                $pdo->prepare("INSERT INTO task_plan_override (bitrix24_task_id, plan_start_date, plan_end_date, original_plan_start, original_plan_end, original_time_estimate) VALUES (?, ?, ?, ?, ?, ?)
+                    ON DUPLICATE KEY UPDATE plan_start_date = VALUES(plan_start_date), plan_end_date = VALUES(plan_end_date)")
+                    ->execute([$taskId, $planStart, $planEnd, $originalStart, $originalEnd, $originalEst]);
+                // Очищаем daily, чтобы приоритет был у интервалов
+                $pdo->prepare("DELETE FROM task_plan_daily WHERE bitrix24_task_id = ?")->execute([$taskId]);
+            } else {
+                // Сохранение по дням (plan_hours_by_date), как раньше
+                $planStart = self::dateOnly($payload['plan_start_date'] ?? null);
+                $planEnd = self::dateOnly($payload['plan_end_date'] ?? null);
+                $planHoursByDate = $payload['plan_hours_by_date'] ?? [];
+                if (!is_array($planHoursByDate)) {
+                    $planHoursByDate = [];
+                }
+                $planStart = $planStart ?? $originalStart;
+                $planEnd = $planEnd ?? $originalEnd;
+                $pdo->prepare("INSERT INTO task_plan_override (bitrix24_task_id, plan_start_date, plan_end_date, original_plan_start, original_plan_end, original_time_estimate) VALUES (?, ?, ?, ?, ?, ?)
+                    ON DUPLICATE KEY UPDATE plan_start_date = VALUES(plan_start_date), plan_end_date = VALUES(plan_end_date)")
+                    ->execute([$taskId, $planStart, $planEnd, $originalStart, $originalEnd, $originalEst]);
+                $pdo->prepare("DELETE FROM task_plan_intervals WHERE bitrix24_task_id = ?")->execute([$taskId]);
+                $pdo->prepare("DELETE FROM task_plan_daily WHERE bitrix24_task_id = ?")->execute([$taskId]);
+                $ins = $pdo->prepare("INSERT INTO task_plan_daily (bitrix24_task_id, plan_date, planned_hours) VALUES (?, ?, ?)");
+                foreach ($planHoursByDate as $date => $hours) {
+                    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) $date)) {
+                        continue;
+                    }
+                    $h = (float) $hours;
+                    if ($h < 0) {
+                        continue;
+                    }
+                    $ins->execute([$taskId, $date, $h]);
+                }
             }
 
             return ['success' => true, 'bitrix24_task_id' => $taskId];
@@ -768,6 +855,46 @@ final class Application
             $d = new \DateTimeImmutable($dayStr);
             if ($d >= $periodStart && $d <= $periodEnd) {
                 $result[$dayStr] = round($hoursPerDay, 3);
+            }
+        }
+        return $result;
+    }
+
+    /**
+     * Плановые часы по дням из интервалов переплана (рабочие дни в каждом интервале получают hours_per_day).
+     *
+     * @param array<int, array{date_from: string, date_to: string, hours_per_day: float}> $intervals
+     * @return array<string, float> дата Y-m-d => часы
+     */
+    private static function computePlanHoursByDateFromIntervals(array $intervals, string $periodFrom, string $periodTo): array
+    {
+        $result = [];
+        $periodStart = new \DateTimeImmutable($periodFrom);
+        $periodEnd = new \DateTimeImmutable($periodTo);
+        foreach ($intervals as $int) {
+            $from = self::dateOnly($int['date_from'] ?? null);
+            $to = self::dateOnly($int['date_to'] ?? null);
+            if ($from === null || $to === null) {
+                continue;
+            }
+            $h = (float) ($int['hours_per_day'] ?? 0);
+            if ($h < 0) {
+                continue;
+            }
+            $start = new \DateTimeImmutable($from);
+            $end = new \DateTimeImmutable($to);
+            if ($start > $end) {
+                [$start, $end] = [$end, $start];
+            }
+            $cursor = $start;
+            while ($cursor <= $end) {
+                if (!self::isWeekend($cursor)) {
+                    $dayStr = $cursor->format('Y-m-d');
+                    if ($cursor >= $periodStart && $cursor <= $periodEnd) {
+                        $result[$dayStr] = round($h, 3);
+                    }
+                }
+                $cursor = $cursor->modify('+1 day');
             }
         }
         return $result;

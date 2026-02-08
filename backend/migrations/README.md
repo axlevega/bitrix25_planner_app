@@ -37,3 +37,5 @@
 - **017_bitrix24_task_status.sql** — статусы задач B24 (см. файл).
 - **018_drop_project_work_type.sql** — удаление таблицы project_work_type; тип задачи определяется пользовательским свойством в B24.
 - **019_drop_plan_entries_and_work_types.sql** — удаление таблиц plan_entries и work_types; загрузка считается только по задачам B24.
+- **020_planning_default_uf_filter.sql** — настройки фильтра по UF для планирования.
+- **021_task_plan_intervals.sql** — интервалы переплана с разрывами: date_from, date_to, hours_per_day, sort_order; одна задача — несколько интервалов.
