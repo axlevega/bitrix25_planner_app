@@ -37,6 +37,12 @@ const routes = [
     component: () => import('../views/PlanningGridView.vue'),
     meta: { title: 'Планирование (сетка)' },
   },
+  {
+    path: '/ui-showcase',
+    name: 'UiShowcase',
+    component: () => import('../views/UiShowcaseView.vue'),
+    meta: { title: 'UI Showcase' },
+  },
 ]
 
 const router = createRouter({
